@@ -72,10 +72,12 @@ Inventaire du `C:\` du DC à ce stade (cf. capture) :
 | `adfs_cert.cer`, `adfs_cert.rsp`, `adfs_req.csr`, `adfs_req.inf` | ⚠️ Artefacts de l'ancien projet AD FS (archivé dans `legacy/`) — **ne pas utiliser**, à purger en Phase 6. |
 | `caddy-internal-root.crt` | ⚠️ Résidu d'un test antérieur avec `tls internal` — **ne pas utiliser**, à purger en Phase 6. |
 
-**a. Lier la clé privée au certificat émis et l'exporter (DC)** — idempotent : si le certificat est déjà accepté dans le magasin, `certreq -accept` renvoie une erreur bénigne, ignorable :
+**a. Lier la clé privée au certificat émis et l'exporter (DC)**
+
+⚠️ `certreq -accept` **sans contexte explicite** cherche la requête en attente dans le magasin **utilisateur** par défaut sur ce build. Or l'INF d'origine porte `MachineKeySet = TRUE` : la clé privée pendante est dans le magasin **machine**. C'est ce qui produit l'erreur observée (`certreq -accept C:\auth-vw.cer` → invite `-user | -machine argument` puis, si on republie sans le flag, la boîte de dialogue *Certificate Request Processor* : `Cannot find object or property. 0x80092004 (CRYPT_E_NOT_FOUND)` — certreq a cherché au mauvais endroit, pas d'échec de la PKI elle-même). **Toujours passer `-machine` explicitement** :
 
 ```powershell
-DC> certreq -accept C:\auth-vw.cer
+DC> certreq -accept -machine C:\auth-vw.cer
 DC> $thumb = (Get-PfxCertificate -FilePath C:\auth-vw.cer).Thumbprint
 DC> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb }
 DC> if (-not $cert) { throw "Certificat non trouve dans Cert:\LocalMachine\My - cle privee absente, la CSR devra etre regeneree avec Exportable=TRUE" }
@@ -83,7 +85,9 @@ DC> $pfxPass = ConvertTo-SecureString -String "<mot_de_passe_temporaire_export>"
 DC> Export-PfxCertificate -Cert $cert -FilePath C:\auth-vw.pfx -Password $pfxPass
 ```
 
-Si le `throw` se déclenche : la CSR d'origine n'a probablement pas été générée avec `Exportable = TRUE` — revenir aux commandes `certreq -new`/`-submit` (voir historique de commandes ou régénérer une nouvelle CSR avec `Exportable = TRUE` dans l'INF) plutôt que de contourner.
+Cette commande est idempotente : si le certificat est déjà accepté dans le magasin machine, `certreq -accept -machine` renvoie une erreur bénigne (déjà présent) — sans conséquence, poursuivre avec la ligne `$thumb` suivante.
+
+Si le `throw` se déclenche malgré `-machine` : la CSR d'origine n'a probablement pas été générée avec `Exportable = TRUE` — revenir aux commandes `certreq -new`/`-submit` (voir historique de commandes ou régénérer une nouvelle CSR avec `Exportable = TRUE` dans l'INF) plutôt que de contourner.
 
 **b. Transférer (Debian)** :
 
