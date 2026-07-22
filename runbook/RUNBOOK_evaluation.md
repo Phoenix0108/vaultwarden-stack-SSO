@@ -140,8 +140,10 @@ DC> Export-PfxCertificate -Cert $cert -FilePath C:\vault-new.pfx -Password $pfxP
 
 ```bash
 DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault-new.pfx; get vault-new.cer; get adcs-root.pem'
-DEBIAN> openssl x509 -inform der -in vault-new.cer -out vault-new.pem
+DEBIAN> file vault-new.cer   # verifier le format reel avant conversion
+DEBIAN> openssl x509 -in vault-new.cer -out vault-new.pem
 ```
+⚠️ `certreq -submit` **sans `-binary`** sort le certificat encodé en Base64 (compatible PEM), pas en DER brut : `-inform der` échoue avec `No supported data to decode` sur ce fichier. `openssl x509` sans `-inform` explicite attend du PEM par défaut, ce qui correspond au format réel produit ici — pas de conversion DER→PEM nécessaire.
 
 **e. Vérifier ce que couvre réellement le certificat avant de le monter** :
 
