@@ -15,6 +15,9 @@
 | `<slug>` | `.env` (`VW_SSO_AUTHORITY`), doc Authentik | slug du Provider OIDC Vaultwarden créé côté Authentik |
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
+| `<URL_DU_DEPOT_GIT>` | Phase 1.0a | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
+| `<CA-CommonName>` | Phase 1.1 Option B (`certreq -submit -config`) | `Get-CATransaction`/`certutil -CAInfo` sur le DC donne `<NomServeur>\<NomCA>` exact |
+| `<mot_de_passe_temporaire_export>` | Phase 1.1 Option B | mot de passe fort, transmis hors bande, à usage unique pour le PFX (jamais dans un fichier versionné) |
 
 ## Checklist globale
 
@@ -31,24 +34,105 @@
 
 **Fichiers** : `deploy/caddy/Caddyfile`, `deploy/docker/docker-compose.yml`, `deploy/docker/Dockerfile`
 
-### 1.1 Récupérer et placer les fichiers TLS (DEBIAN, après avoir obtenu vault.crt/vault.key/adcs-root.crt)
+> **Hypothèse de cette version** : le serveur Docker (`192.168.100.89`) est **repartu de zéro** — aucun dépôt cloné, aucune stack `docker compose` déployée, aucun certificat présent. Docker Engine + le plugin Compose sont supposés déjà installés sur l'OS (Debian 13) ; sinon voir 1.0b.
 
-Selon le brief, la chaîne est déjà assemblée et vérifiée (empreintes SHA-1 OK) — il reste à la transférer et la monter. Si les fichiers sont déjà sur le DC ou un poste d'admin Windows :
+### 1.0a Provisionner le dépôt sur le serveur reset
+
+```bash
+DEBIAN> git clone <URL_DU_DEPOT_GIT> vaultwarden-stack-SSO
+DEBIAN> cd vaultwarden-stack-SSO
+DEBIAN> git checkout claude/sso-kerberos-vaultwarden-ad-rzg3w0
+DEBIAN> docker --version && docker compose version
+# attendu : les deux commandes répondent (pas de "command not found")
+```
+
+### 1.0b Si Docker n'est pas installé (à sauter sinon)
+
+```bash
+DEBIAN> curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+DEBIAN> echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list
+DEBIAN> sudo apt-get update
+DEBIAN> sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+DEBIAN> sudo systemctl enable --now docker
+```
+
+### 1.1 Obtenir la chaîne TLS (vault.crt + vault.key + adcs-root.crt)
+
+**Option A — le certificat a déjà été émis/assemblé ailleurs** (sur le DC ou un poste d'admin Windows, non affecté par le reset du serveur Vaultwarden) :
 
 ```bash
 DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'get vault.crt; get vault.key; get adcs-root.crt'
 ```
 
-Puis, depuis le répertoire du dépôt :
+**Option B — le certificat n'existe plus nulle part : réémission complète depuis zéro** (à exécuter sur le DC, seul endroit disposant nativement de l'outillage PKI Windows) :
+
+```powershell
+DC> @"
+[Version]
+Signature="`$Windows NT`$"
+[NewRequest]
+Subject = "CN=vault.vaultwardensso.local"
+KeyLength = 2048
+KeySpec = 1
+Exportable = TRUE
+MachineKeySet = TRUE
+SMIME = FALSE
+PrivateKeyArchive = FALSE
+UserProtected = FALSE
+UseExistingKeySet = FALSE
+ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
+ProviderType = 12
+RequestType = PKCS10
+KeyUsage = 0xa0
+[EnhancedKeyUsageExtension]
+OID=1.3.6.1.5.5.7.3.1
+[Extensions]
+2.5.29.17 = "{text}"
+_continue_ = "dns=vault.vaultwardensso.local&"
+"@ | Out-File -Encoding ascii vault.inf
+
+DC> certreq -new vault.inf vault.csr
+DC> certreq -submit -attrib "CertificateTemplate:WebServer" -config "192.168.100.76\<CA-CommonName>" vault.csr vault.cer
+DC> certreq -accept vault.cer
+```
+
+Exporter la clé privée + le certificat (le compte utilisé doit avoir accès au magasin machine où la clé a été générée) :
+
+```powershell
+DC> $pfxPass = ConvertTo-SecureString -String "<mot_de_passe_temporaire_export>" -AsPlainText -Force
+DC> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -eq "CN=vault.vaultwardensso.local" } | Select-Object -First 1
+DC> Export-PfxCertificate -Cert $cert -FilePath C:\vault.pfx -Password $pfxPass
+DC> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '473BAAC9189D52715E3E73CED9BEC691293BED10' }) -FilePath C:\adcs-root.cer -Type CERT
+```
+
+Transférer puis convertir côté Debian (mot de passe PFX transmis hors bande, jamais dans ce runbook) :
 
 ```bash
+DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'get vault.pfx; get adcs-root.cer'
+DEBIAN> openssl pkcs12 -in vault.pfx -nocerts -nodes -out vault.key
+DEBIAN> openssl pkcs12 -in vault.pfx -clcerts -nokeys -out vault.crt
+DEBIAN> openssl x509 -inform der -in adcs-root.cer -out adcs-root.crt
+DEBIAN> openssl x509 -in adcs-root.crt -noout -fingerprint -sha1
+# attendu : 473BAAC9189D52715E3E73CED9BEC691293BED10 (comparer à la valeur de contexte)
+```
+
+Puis, côté DC, supprimer les fichiers transitoires (`vault.pfx`, `vault.cer`, `vault.csr`, `vault.inf`, `adcs-root.cer` — la clé privée exportée est un secret) :
+
+```powershell
+DC> Remove-Item C:\vault.pfx, C:\vault.cer, C:\vault.csr, C:\vault.inf, C:\adcs-root.cer -Force
+```
+
+### 1.2 Placer les fichiers dans le dépôt (DEBIAN)
+
+```bash
+DEBIAN> cd vaultwarden-stack-SSO
 DEBIAN> sudo install -o root -g root -m 644 vault.crt  deploy/caddy/certs/vault.crt
 DEBIAN> sudo install -o root -g root -m 600 vault.key  deploy/caddy/certs/vault.key
 DEBIAN> sudo install -o root -g root -m 644 adcs-root.crt deploy/docker/adcs-root.crt
-DEBIAN> rm -f vault.crt vault.key adcs-root.crt   # copies locales transitoires
+DEBIAN> rm -f vault.crt vault.key vault.pfx adcs-root.crt adcs-root.cer   # copies locales transitoires
 ```
 
-### 1.2 Secrets applicatifs
+### 1.3 Secrets applicatifs
 
 ```bash
 DEBIAN> cd deploy/docker
@@ -58,14 +142,15 @@ DEBIAN> openssl rand -base64 48   # coller le résultat dans .env -> VW_ADMIN_TO
 DEBIAN> nano .env                 # (ou vi/vim) renseigner VW_ADMIN_TOKEN
 ```
 
-### 1.3 Déploiement
+### 1.4 Déploiement
 
 ```bash
 DEBIAN> cd deploy/docker
+DEBIAN> mkdir -p vw-data caddy/logs   # bind mounts attendus par docker-compose.yml, absents sur un serveur reset
 DEBIAN> docker compose up -d caddy
 ```
 
-### 1.4 Gate
+### 1.5 Gate
 
 ```bash
 DEBIAN> openssl s_client -connect vault.vaultwardensso.local:443 -servername vault.vaultwardensso.local </dev/null 2>/dev/null | openssl x509 -noout -issuer
@@ -75,7 +160,7 @@ DEBIAN> openssl s_client -connect vault.vaultwardensso.local:443 -servername vau
 # attendu : Verify return code: 0 (ok)
 ```
 
-### 1.5 Dette immédiate à solder (confiance TLS du conteneur)
+### 1.6 Dette immédiate à solder (confiance TLS du conteneur)
 
 ```bash
 DEBIAN> docker compose up -d --build vaultwarden
