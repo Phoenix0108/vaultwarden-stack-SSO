@@ -10,10 +10,11 @@
 # Jamais "tls internal" en cible : la chaine doit remonter jusqu'a l'AC
 # interne pour etre approuvee par les postes du domaine (GPO trust store).
 # -----------------------------------------------------------------------------
-# auth.vaultwardensso.local est un reverse proxy pur vers le vrai serveur
-# Authentik (AUTHENTIK_UPSTREAM, cf. docker-compose.yml) : Caddy ne comprend
-# pas SPNEGO/Kerberos, il transmet tel quel l'en-tete Negotiate/Authorization,
-# la validation du ticket se fait cote Authentik avec son propre keytab.
+# auth.vaultwardensso.local est un reverse proxy pur vers authentik-server
+# (meme VM, meme docker-compose, reseau Docker interne authentik_proxy -- pas
+# d'IP LAN a connaitre). Caddy ne comprend pas SPNEGO/Kerberos, il transmet tel
+# quel l'en-tete Negotiate/Authorization ; la validation du ticket se fait cote
+# Authentik avec son propre keytab.
 # =============================================================================
 {
     # Point d'admin Caddy désactivé (réduction de surface)
@@ -65,11 +66,9 @@ auth.vaultwardensso.local {
         -Server
     }
 
-    # AUTHENTIK_UPSTREAM (docker-compose.yml) : URL complete du vrai serveur
-    # Authentik, ex. https://192.168.100.50 ou http://192.168.100.50:9000.
-    # Repli RFC 5737 (TEST-NET-1, jamais routable) si non renseigne : Caddy
-    # demarre normalement, ce vhost renvoie une erreur de proxy (502/504) tant
-    # que la vraie valeur n'est pas configuree, plutot que d'empecher tout le
-    # stack de demarrer.
-    reverse_proxy {$AUTHENTIK_UPSTREAM:https://192.0.2.1}
+    # authentik-server : nom du service Docker (authentik_proxy), resolu par le
+    # DNS interne Docker -- pas de placeholder/IP a gerer. HTTP en clair est
+    # correct ici : trafic confine au reseau Docker interne authentik_proxy
+    # (internal=true), jamais expose hors du conteneur Caddy.
+    reverse_proxy authentik-server:9000
 }

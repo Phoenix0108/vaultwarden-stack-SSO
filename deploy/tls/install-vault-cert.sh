@@ -225,7 +225,7 @@ ok "Chaine installee dans deploy/caddy/certs et deploy/docker"
 # --- 6. Secrets applicatifs (.env, idempotent : jamais ecrase s'il existe) ---------
 cd deploy/docker
 if [ ! -f .env ]; then
-    info "Creation de .env (nouveau token admin genere, entropie suffisante)"
+    info "Creation de .env (nouveaux secrets generes, entropie suffisante)"
     cp .env.example .env
     chmod 600 .env
     token=$(openssl rand -base64 48)
@@ -235,23 +235,31 @@ else
     warn ".env deja present, non modifie (idempotent) -- verifier VW_ADMIN_TOKEN manuellement si besoin"
 fi
 
-# AUTHENTIK_UPSTREAM (Caddy, pas Vaultwarden -- tout passe par Caddy) : pas
-# besoin d'une IP valide ici pour que Phase 1 demarre, le Caddyfile a son propre
-# repli RFC 5737. Juste un rappel si ce n'est toujours pas configure.
-if ! grep -q '^AUTHENTIK_UPSTREAM=.\+' .env 2>/dev/null; then
-    warn "AUTHENTIK_UPSTREAM non renseigne dans .env -- Caddy demarrera quand meme, mais auth.vaultwardensso.local"
-    warn "  ne fonctionnera pour AUCUN utilisateur tant que ce n'est pas mis a la vraie URL d'Authentik (Phase 5)."
+# PG_PASS / AUTHENTIK_SECRET_KEY : purs secrets d'entropie (Authentik meme VM,
+# meme docker-compose) -- generes automatiquement si encore au placeholder,
+# que .env soit neuf ou preexistant (upgrade depuis une version sans Authentik).
+if grep -q '^PG_PASS=CHANGE_ME' .env 2>/dev/null; then
+    pgpass=$(openssl rand -base64 36 | tr -d '\n=/+' | head -c 48)
+    sed -i "s#^PG_PASS=.*#PG_PASS=${pgpass}#" .env
+    ok "PG_PASS genere"
+fi
+if grep -q '^AUTHENTIK_SECRET_KEY=CHANGE_ME' .env 2>/dev/null; then
+    secret=$(openssl rand -base64 60 | tr -d '\n')
+    sed -i "s#^AUTHENTIK_SECRET_KEY=.*#AUTHENTIK_SECRET_KEY=${secret}#" .env
+    ok "AUTHENTIK_SECRET_KEY genere"
 fi
 
 mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (deploy/caddy/ est un sibling)
 
 # --- 7. Resolution locale (hote non domain-joined, idempotent) ---------------------
-if ! grep -q "$SPN_HOSTNAME" /etc/hosts; then
-    echo "127.0.0.1 $SPN_HOSTNAME" | sudo tee -a /etc/hosts >/dev/null
-    ok "/etc/hosts mis a jour pour $SPN_HOSTNAME"
-else
-    warn "/etc/hosts contient deja une entree pour $SPN_HOSTNAME, non modifiee"
-fi
+for h in "$SPN_HOSTNAME" "$AUTH_HOSTNAME"; do
+    if ! grep -q "$h" /etc/hosts; then
+        echo "127.0.0.1 $h" | sudo tee -a /etc/hosts >/dev/null
+        ok "/etc/hosts mis a jour pour $h"
+    else
+        warn "/etc/hosts contient deja une entree pour $h, non modifiee"
+    fi
+done
 
 # --- 8. Deploiement + gates ----------------------------------------------------------
 info "Build et demarrage de la stack"
@@ -269,6 +277,31 @@ if ! docker exec vaultwarden curl -fsS "https://$SPN_HOSTNAME/alive" >/dev/null;
     fail "Gate interne echoue -- le conteneur vaultwarden ne joint pas Caddy en HTTPS (verifier l'alias reseau backend)"
 fi
 ok "Gate interne : vaultwarden fait confiance a la chaine"
+
+# Authentik (server+worker+postgresql+redis) met nettement plus longtemps que
+# Caddy/Vaultwarden a devenir pret au premier demarrage (migrations DB) -- gate
+# souple (avertit, ne bloque pas la fin du script) plutot qu'une attente fixe
+# arbitraire. Un code HTTP quelconque (meme une redirection vers le setup
+# initial) confirme que Caddy joint bien authentik-server ; une absence totale
+# de reponse ne l'est pas.
+info "Verification qu'Authentik repond (peut prendre 1-2 minutes au premier demarrage)"
+attempt=1
+authentik_ok=0
+while (( attempt <= 10 )); do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' "https://$AUTH_HOSTNAME/" 2>/dev/null || echo 000)
+    if [ "$code" != "000" ]; then
+        authentik_ok=1
+        break
+    fi
+    sleep 6
+    attempt=$((attempt+1))
+done
+if [ "$authentik_ok" = "1" ]; then
+    ok "Authentik repond via Caddy (HTTP $code) -- normal si ce n'est pas 200 avant le setup initial"
+else
+    warn "Authentik ne repond toujours pas apres 60s -- verifier 'docker compose logs authentik-server authentik-worker'"
+    warn "  (migrations DB en cours au premier demarrage : patienter puis retester manuellement)"
+fi
 
 echo ""
 ok "Phase 1 terminee et validee."
