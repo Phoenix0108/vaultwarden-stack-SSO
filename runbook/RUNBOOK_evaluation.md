@@ -74,8 +74,9 @@ Inventaire du `C:\` du DC à ce stade (cf. capture) :
 
 > **Si `adcs-root.cer`/`.pem`/`.b64` a disparu du DC** (supprimé par erreur lors d'un nettoyage, `smbclient get adcs-root.pem` renvoie `NT_STATUS_OBJECT_NAME_NOT_FOUND`) : 🔵 le régénérer depuis le magasin racine via son empreinte connue plutôt que de tout réémettre :
 > ```powershell
-> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '473BAAC9189D52715E3E73CED9BEC691293BED10' }) -FilePath C:\adcs-root.cer -Type CERT
+> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '473BAAC9189D52715E3E73CED9BEC691293BED10' } | Select-Object -First 1) -FilePath C:\adcs-root.cer -Type CERT
 > ```
+> ⚠️ Sans `Select-Object -First 1` : `Cannot convert 'System.Object[]' to the type '...Certificate'` si `Cert:\LocalMachine\Root` contient plusieurs entrées avec la même empreinte (courant : root CA poussé plusieurs fois via GPO/autoenrollment) — `Export-Certificate -Cert` n'accepte pas un tableau.
 > 🟢 puis, côté Debian (`Export-Certificate -Type CERT` sort du DER brut, contrairement à `certreq -submit` vu en §1.1b — `-inform der` est correct ici) :
 > ```bash
 > smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get adcs-root.cer'
@@ -141,7 +142,7 @@ Ne pas fermer la session PowerShell entre `-new` et `-accept` : c'est justement 
 
 ```powershell
 $thumb = (Get-PfxCertificate -FilePath C:\vault-new.cer).Thumbprint
-$cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb }
+$cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb } | Select-Object -First 1
 if (-not $cert) { throw "Certificat non trouve dans Cert:\LocalMachine\My juste apres -accept - verifier les erreurs de b ci-dessus avant de continuer" }
 $pfxPassPlain = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
 $pfxPass = ConvertTo-SecureString -String $pfxPassPlain -AsPlainText -Force
