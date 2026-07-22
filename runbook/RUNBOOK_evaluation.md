@@ -21,7 +21,7 @@
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
 | `<URL_DU_DEPOT_GIT>` | Phase 1.0a | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
-| `<NomServeur>\<NomCA>` | Phase 1.1b (`certreq -submit -config`) | sortie de `certutil -ADCA` (ligne `Config:`) exécuté sur le DC |
+| `<NomServeur>\<NomCA>` | Phase 1.1b (`certreq -submit -config`) | valeur constatée dans cet environnement : `SRVADTEST\vaultwardensso-srvadtest-CA` (à reconstruire depuis `certutil -ADCA` si la CA change — voir §1.1b) |
 | `<mot_de_passe_temporaire_export>` | Phase 1.1c | mot de passe fort, transmis hors bande, à usage unique pour le PFX `vault-new.pfx` (jamais dans un fichier versionné) |
 
 ## Checklist globale
@@ -89,8 +89,8 @@ Nouveaux noms de fichiers (`vault-new.*`) pour ne pas mélanger avec les `auth-v
 
 ```powershell
 DC> certutil -ADCA
-# repérer la ligne "Config:" -> note le "<NomServeur>\<NomCA>" exact pour -config ci-dessous
 ```
+`certutil -ADCA` **n'affiche pas** de ligne littérale `"Config:"` — la valeur pour `-config` se reconstruit à partir de deux champs de la sortie : le nom de la CA (premier `CN=` de `cACertificateDN`) et le nom de la machine CA (visible dans la liste ACL, entrée `<DOMAINE>\<NOM_MACHINE>$`). Constaté dans cet environnement : `cACertificateDN = CN=vaultwardensso-srvadtest-CA, ...` et `Allow Full Control  VAULTWARDENSSO\SRVADTEST$` → `-config "SRVADTEST\vaultwardensso-srvadtest-CA"` (déjà substitué ci-dessous).
 
 ```powershell
 DC> @"
@@ -118,9 +118,11 @@ _continue_ = "dns=vault.vaultwardensso.local&"
 "@ | Out-File -Encoding ascii vault-new.inf
 
 DC> certreq -new -machine vault-new.inf vault-new.csr
-DC> certreq -submit -machine -attrib "CertificateTemplate:WebServer" -config "<NomServeur>\<NomCA>" vault-new.csr vault-new.cer
+DC> certreq -submit -attrib "CertificateTemplate:WebServer" -config "SRVADTEST\vaultwardensso-srvadtest-CA" vault-new.csr vault-new.cer
 DC> certreq -accept -machine vault-new.cer
 ```
+
+⚠️ `-submit` **n'accepte pas** `-machine` sur ce build (`Unexpected argument: -machine` + boîte de dialogue *Certificate Request Processor: The parameter is incorrect. 0x80070057*) — le contexte machine a déjà été fixé par `-new -machine` qui crée la requête en attente dans le magasin machine ; `-submit` se contente de poster le CSR à la CA, il n'a pas besoin de connaître ce contexte. Seuls `-new` et `-accept` prennent `-machine` sur cette version de `certreq`.
 
 Ne pas fermer la session PowerShell entre `-new` et `-accept` : c'est justement cet écart de session/état qui a rendu `auth-vw.cer` inutilisable.
 
