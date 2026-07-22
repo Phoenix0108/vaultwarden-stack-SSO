@@ -34,13 +34,17 @@
 # depot n'est pas deja cloné) :
 #   REPO_URL, REPO_DIR (def. vaultwarden-stack-SSO), REPO_BRANCH
 #   DC_IP, DC_USER, SMB_PASSWORD, SMB_RETRIES
-#   SPN_HOSTNAME, ROOT_THUMBPRINT
+#   SPN_HOSTNAME, AUTH_HOSTNAME, ROOT_THUMBPRINT
+# Tout passe par Caddy : ce script n'a plus besoin de connaitre l'IP reelle
+# d'Authentik (pas d'extra_hosts a renseigner) -- seul AUTHENTIK_UPSTREAM dans
+# .env (docker-compose.yml) en a besoin, a configurer avant la Phase 5.
 # =============================================================================
 set -euo pipefail
 
 DC_IP="${DC_IP:-192.168.100.76}"
 DC_USER="${DC_USER:-VAULTWARDENSSO\\Administrator}"
 SPN_HOSTNAME="${SPN_HOSTNAME:-vault.vaultwardensso.local}"
+AUTH_HOSTNAME="${AUTH_HOSTNAME:-auth.vaultwardensso.local}"
 ROOT_THUMBPRINT="${ROOT_THUMBPRINT:-473BAAC9189D52715E3E73CED9BEC691293BED10}"
 SMB_RETRIES="${SMB_RETRIES:-3}"
 REPO_URL="${REPO_URL:-}"
@@ -98,8 +102,16 @@ git checkout "$REPO_BRANCH" 2>/dev/null || warn "Checkout $REPO_BRANCH ignore (b
 # fichiers suivis par git ; les fichiers ignores (.env, certs, vw-data) ne sont
 # de toute facon jamais concernes.
 info "Mise a jour du depot (git pull --ff-only)"
-git pull --ff-only origin "$REPO_BRANCH" --quiet 2>/dev/null \
-    || warn "git pull --ff-only impossible (modifications locales, pas de reseau, ou deja a jour) -- poursuite avec la copie locale telle quelle"
+DIRTY="$(git status --porcelain)"
+if [ -n "$DIRTY" ]; then
+    warn "Depot local modifie -- pull ignore pour ne rien ecraser. Fichiers concernes :"
+    echo "$DIRTY" | sed 's/^/    /'
+    warn "Ces modifications empechent toute mise a jour automatique (ce script continuera avec cette copie locale, potentiellement perimee)."
+    warn "Pour repasser sur la version officielle du depot (perd les modifications locales listees ci-dessus) :"
+    warn "    git -C '$REPO_ROOT' checkout -- . && git -C '$REPO_ROOT' pull --ff-only origin $REPO_BRANCH"
+elif ! git pull --ff-only origin "$REPO_BRANCH" --quiet; then
+    warn "git pull --ff-only a echoue (reseau ? credentials ? deja a jour ?) -- poursuite avec la copie locale telle quelle"
+fi
 
 # Relais vers la copie du depot (a jour, avec tous les correctifs) si ce script
 # a ete lance en standalone avant que le depot n'existe -- evite d'executer une
@@ -109,7 +121,7 @@ if [ -z "${_VAULT_CERT_REEXEC:-}" ] && [ -f "$CANONICAL" ] \
         && [ "$(readlink -f "$0" 2>/dev/null || echo "$0")" != "$(readlink -f "$CANONICAL")" ]; then
     info "Relais vers la copie du depot : $CANONICAL"
     exec env _VAULT_CERT_REEXEC=1 REPO_URL="$REPO_URL" REPO_DIR="$REPO_DIR" REPO_BRANCH="$REPO_BRANCH" \
-        DC_IP="$DC_IP" DC_USER="$DC_USER" SPN_HOSTNAME="$SPN_HOSTNAME" \
+        DC_IP="$DC_IP" DC_USER="$DC_USER" SPN_HOSTNAME="$SPN_HOSTNAME" AUTH_HOSTNAME="$AUTH_HOSTNAME" \
         ROOT_THUMBPRINT="$ROOT_THUMBPRINT" SMB_RETRIES="$SMB_RETRIES" \
         bash "$CANONICAL" "$@"
 fi
@@ -170,10 +182,10 @@ ok "4 fichiers transferes"
 # --- 2. Conversion certificat serveur (Base64/PEM -- certreq -submit sans -binary) --
 openssl x509 -in vault-new.cer -out vault-new.pem \
     || fail "Conversion vault-new.cer -> PEM echouee"
-if ! openssl x509 -in vault-new.pem -noout -ext subjectAltName | grep -q "$SPN_HOSTNAME"; then
-    fail "SAN du certificat ne contient pas $SPN_HOSTNAME -- mauvais certificat, ne pas continuer."
-fi
-ok "SAN verifie : $SPN_HOSTNAME present"
+SAN="$(openssl x509 -in vault-new.pem -noout -ext subjectAltName)"
+echo "$SAN" | grep -q "$SPN_HOSTNAME" || fail "SAN du certificat ne contient pas $SPN_HOSTNAME -- mauvais certificat, ne pas continuer."
+echo "$SAN" | grep -q "$AUTH_HOSTNAME" || fail "SAN du certificat ne contient pas $AUTH_HOSTNAME -- Caddy ne pourra pas servir auth.* avec ce certificat (regenerer avec New-VaultCertDC.ps1 -AuthHostname)."
+ok "SAN verifie : $SPN_HOSTNAME et $AUTH_HOSTNAME presents"
 
 # --- 3. Conversion racine AD CS (DER brut -- Export-Certificate -Type CERT) ---------
 openssl x509 -inform der -in adcs-root.cer -out adcs-root.pem \
@@ -221,6 +233,14 @@ if [ ! -f .env ]; then
     ok ".env cree avec VW_ADMIN_TOKEN genere"
 else
     warn ".env deja present, non modifie (idempotent) -- verifier VW_ADMIN_TOKEN manuellement si besoin"
+fi
+
+# AUTHENTIK_UPSTREAM (Caddy, pas Vaultwarden -- tout passe par Caddy) : pas
+# besoin d'une IP valide ici pour que Phase 1 demarre, le Caddyfile a son propre
+# repli RFC 5737. Juste un rappel si ce n'est toujours pas configure.
+if ! grep -q '^AUTHENTIK_UPSTREAM=.\+' .env 2>/dev/null; then
+    warn "AUTHENTIK_UPSTREAM non renseigne dans .env -- Caddy demarrera quand meme, mais auth.vaultwardensso.local"
+    warn "  ne fonctionnera pour AUCUN utilisateur tant que ce n'est pas mis a la vraie URL d'Authentik (Phase 5)."
 fi
 
 mkdir -p vw-data caddy/logs

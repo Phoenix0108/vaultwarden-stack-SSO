@@ -5,13 +5,18 @@
 # Authentik + Trusted Device Encryption). Voir deploy/docs/02_risk_analysis_tde.md
 # pour l'analyse de risque TDE et la procédure break-glass AVANT SSO_ONLY=true.
 # Hôte Docker NON joint au domaine AD : aucune résolution DNS automatique vers
-# la zone vaultwardensso.local. D'où l'alias réseau ci-dessous (résolution
-# interne, sans dépendance DNS) et l'extra_hosts obligatoire vers Authentik.
+# la zone vaultwardensso.local. Tout passe par Caddy (vault.* ET auth.*) :
+# Vaultwarden résout les deux noms en interne vers le conteneur Caddy via
+# l'alias réseau ci-dessous, sans jamais avoir besoin de connaître l'IP reelle
+# d'Authentik lui-même — c'est Caddy seul qui a besoin de AUTHENTIK_UPSTREAM
+# pour reverse-proxier vers le vrai serveur Authentik.
 # Architecture réseau :
 #   - frontend         : Caddy <-> extérieur (443/80)
-#   - backend           : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy
-#   - authentik_egress  : bridge dédié, seule sortie autorisée = Authentik:443
-#                          (filtrée DOCKER-USER, cf. deploy/firewall/vw-egress-fw.sh)
+#   - backend           : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy ;
+#                          Caddy y porte aussi l'alias auth.vaultwardensso.local
+#   - authentik_egress  : bridge dédié sur Caddy (pas Vaultwarden), seule sortie
+#                          autorisée = Authentik:443 (filtrée DOCKER-USER, cf.
+#                          deploy/firewall/vw-egress-fw.sh)
 # Durcissement conteneur : no-new-privileges, cap_drop ALL, read_only + tmpfs.
 # Secrets : ADMIN_TOKEN, SSO_CLIENT_SECRET via .env (hors dépôt versionné).
 # =============================================================================
@@ -25,7 +30,7 @@ services:
       DOMAIN: "https://vault.vaultwardensso.local/"
       SIGNUPS_ALLOWED: "false"
       ADMIN_TOKEN: "${VW_ADMIN_TOKEN}"          # depuis .env
-      # --- SSO OIDC (Authentik) — noms de variables vérifiés contre SSO.md du fork au moment de la rédaction ---
+      # --- SSO OIDC (Authentik, via Caddy) — noms de variables vérifiés contre SSO.md du fork au moment de la rédaction ---
       SSO_ENABLED: "true"
       SSO_ONLY: "false"                         # NE PASSER A "true" QU'APRES validation du break-glass (gate Phase 5.7)
       SSO_CLIENT_ID: "${VW_SSO_CLIENT_ID}"
@@ -43,8 +48,7 @@ services:
     volumes:
       - ./vw-data:/data/
     networks:
-      - backend
-      - authentik_egress
+      - backend                       # auth.* ET vault.* resolus ici vers Caddy, aucun egress direct necessaire
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -52,8 +56,6 @@ services:
     read_only: true                  # rootfs immuable ...
     tmpfs:
       - /tmp                         # ... /data (volume) reste le seul point d'écriture
-    extra_hosts:                      # OBLIGATOIRE : hôte non domain-joined, pas de résolution AD DNS automatique
-      - "auth.vaultwardensso.local:${VW_AUTHENTIK_IP}"   # renseigner VW_AUTHENTIK_IP dans .env avant le premier up
     deploy:
       resources:
         limits:                      # anti-DoS : borne l'impact d'une saturation
@@ -69,13 +71,20 @@ services:
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped
+    environment:
+      # URL complete (schema+hote+port) du serveur Authentik reel, ex. https://192.168.100.50
+      # ou http://192.168.100.50:9000 selon sa config TLS interne. Defaut RFC 5737
+      # (TEST-NET-1, jamais routable) applique par le Caddyfile si non renseigne :
+      # Caddy demarre normalement, auth.* renvoie une erreur de proxy tant que ce
+      # n'est pas configure, plutot que de bloquer tout le stack au demarrage.
+      AUTHENTIK_UPSTREAM: "${AUTHENTIK_UPSTREAM:-}"
     ports:
       - "443:443"
       - "443:443/udp"                # HTTP/3
       - "80:80"                      # redirect HTTP -> HTTPS
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/etc/caddy/certs:ro   # vault.crt (chaîne complète) + vault.key (600, root) — AC interne AD CS
+      - ./caddy/certs:/etc/caddy/certs:ro   # vault.crt (SAN vault.* + auth.*) + vault.key (600, root) — AC interne AD CS
       - caddy-data:/data
       - caddy-config:/config
       - ./caddy/logs:/var/log/caddy
@@ -84,6 +93,8 @@ services:
       backend:
         aliases:
           - vault.vaultwardensso.local   # resolution interne sans dependance DNS (hote non domain-joined)
+          - auth.vaultwardensso.local    # idem : Vaultwarden atteint Authentik EN PASSANT PAR Caddy
+      authentik_egress: {}               # seul Caddy a besoin de joindre le vrai Authentik (voir plus haut)
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

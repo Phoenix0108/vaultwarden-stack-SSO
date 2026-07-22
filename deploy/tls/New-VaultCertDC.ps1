@@ -2,10 +2,12 @@
 <#
 =================================================================================
  New-VaultCertDC.ps1
- Genere et exporte le certificat serveur (vault.vaultwardensso.local) + la
- racine AD CS, en une seule execution de script (le decalage de session entre
- certreq -new et -accept rend le certificat orphelin -- vecu en pratique lors
- des essais manuels ; un script atomique elimine ce risque par construction).
+ Genere et exporte le certificat serveur (SAN couvrant vault.vaultwardensso.local
+ ET auth.vaultwardensso.local -- tout passe par Caddy, un seul certificat suffit
+ pour les deux vhosts) + la racine AD CS, en une seule execution de script (le
+ decalage de session entre certreq -new et -accept rend le certificat orphelin
+ -- vecu en pratique lors des essais manuels ; un script atomique elimine ce
+ risque par construction).
  A executer sur le DC, PowerShell 5.1 en administrateur. Script 100% ASCII,
  splatting, idempotent (nettoie les artefacts d'une precedente tentative avant
  de regenerer -- une requete en attente orpheline de session n'est de toute
@@ -36,6 +38,7 @@
 [CmdletBinding()]
 param(
     [string] $SpnHostname = 'vault.vaultwardensso.local',
+    [string] $AuthHostname = 'auth.vaultwardensso.local',
     [string] $CaConfig = 'SRVADTEST\vaultwardensso-srvadtest-CA',
     [string] $CertTemplate = 'WebServer',
     [string] $RootThumbprint = '473BAAC9189D52715E3E73CED9BEC691293BED10',
@@ -59,7 +62,7 @@ if (-not $SkipCleanup) {
 
 # --- 1. CSR ----------------------------------------------------------------------
 try {
-    Info "Generation de la CSR pour CN=$SpnHostname"
+    Info "Generation de la CSR pour CN=$SpnHostname (SAN : $SpnHostname, $AuthHostname)"
     $inf = @"
 [Version]
 Signature="`$Windows NT`$"
@@ -82,6 +85,7 @@ OID=1.3.6.1.5.5.7.3.1
 [Extensions]
 2.5.29.17 = "{text}"
 _continue_ = "dns=$SpnHostname&"
+_continue_ = "dns=$AuthHostname&"
 "@
     $inf | Out-File -Encoding ascii "$prefix.inf"
     certreq -new -machine "$prefix.inf" "$prefix.csr" | Out-Null
