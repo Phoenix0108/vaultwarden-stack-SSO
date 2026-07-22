@@ -233,6 +233,43 @@ smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'del authenti
 
 ---
 
+## Phase 2bis — Source LDAP (provisioning des comptes, prérequis Phase 3/5)
+
+**Fichier** : `deploy/kerberos/Setup-LDAPBind-DC.ps1`. Prérequis longtemps implicite ("une source LDAP existante") qui n'existe pas sur un domaine reparti de zéro — ce bloc la crée.
+
+### 🔵 DC
+
+```powershell
+cd C:\vaultwarden-stack-SSO\deploy\kerberos
+.\Setup-LDAPBind-DC.ps1 -Realm 'VAULTWARDENSSO.LOCAL' -Domain 'VAULTWARDENSSO'
+```
+
+Crée (idempotent) `OU=Vaultwarden` (périmètre à peupler avec les vrais comptes à synchroniser) et le compte de bind `svc-authentik-ldap` (lecture seule, deny-interactive-logon, aucune délégation). Mot de passe écrit dans `C:\authentik-ldap-bind.txt` (ACL restreinte, jamais affiché).
+
+### 🟢 DEBIAN — transfert
+
+```bash
+smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get authentik-ldap-bind.txt'
+openssl s_client -connect 192.168.100.76:636 -CAfile deploy/docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
+# attendu : Verify return code: 0 -- sinon ne pas configurer la Source LDAP en LDAPS tant que ce n'est pas corrige
+```
+
+### 🖱️ Source LDAP — action GUI (secret, jamais scriptable vers un tiers)
+
+Directory → Federation & Social login → Create → **LDAP Source** : Server URI `ldaps://192.168.100.76:636`, Bind CN = Bind DN affiché par le script, Bind Password = contenu de `authentik-ldap-bind.txt`, Base DN `OU=Vaultwarden,DC=vaultwardensso,DC=local`. Détails complets : `deploy/authentik/README.md` §0.
+
+### 🟢 DEBIAN — purge
+
+```bash
+shred -u authentik-ldap-bind.txt
+```
+
+### Gate
+
+🖱️ Bouton "Sync" de la Source LDAP dans l'admin Authentik → pas d'erreur, comptes de `OU=Vaultwarden` visibles dans Directory → Users.
+
+---
+
 ## Phase 3 — Source Kerberos Authentik
 
 **Fichiers** : `deploy/authentik/kerberos-sso-blueprint.yaml`, `deploy/authentik/README.md`
