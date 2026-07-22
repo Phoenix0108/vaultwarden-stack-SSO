@@ -25,6 +25,9 @@ deploy/
 │   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden (Phases 1 et 5)
 │   ├── Dockerfile                    # image dérivée : embarque la CA AD CS, version OIDCWarden épinglée
 │   └── .env.example                  # secrets (à copier en .env, chmod 600)
+├── tls/
+│   ├── New-VaultCertDC.ps1           # génère + exporte le certificat vault.* + la racine AD CS (Phase 1, DC)
+│   └── install-vault-cert.sh         # transfert, conversion, installation, déploiement + gates (Phase 1, Debian)
 ├── kerberos/
 │   └── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
 ├── authentik/

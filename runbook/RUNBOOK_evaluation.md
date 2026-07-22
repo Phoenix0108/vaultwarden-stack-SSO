@@ -37,6 +37,18 @@
 
 **Hypothèse** : DC et hôte Docker repartent de zéro — aucun dépôt cloné, aucune stack déployée, aucun certificat existant.
 
+> **Raccourci scripté (recommandé)** : `deploy/tls/New-VaultCertDC.ps1` (🔵 DC) et `deploy/tls/install-vault-cert.sh` (🟢 Debian) automatisent l'intégralité des blocs ci-dessous — idempotents, avec retries réseau et vérifications à chaque étape (voir leurs en-têtes). Les blocs manuels qui suivent restent la référence si un script échoue et qu'il faut diagnostiquer étape par étape.
+> ```powershell
+> # 🔵 DC
+> cd C:\vaultwarden-stack-SSO\deploy\tls
+> .\New-VaultCertDC.ps1
+> ```
+> ```bash
+> # 🟢 Debian, une fois le transfert SMB possible (credentials interactifs par defaut,
+> # ou SMB_PASSWORD=... en variable d'environnement pour un usage non interactif)
+> ./deploy/tls/install-vault-cert.sh
+> ```
+
 ### 🔵 DC — bloc 1 : générer la CSR, l'accepter, exporter clé + racine
 
 Tout dans **la même session PowerShell élevée, sans interruption** (un écart de session entre `-new` et `-accept` rend le certificat orphelin — vécu en pratique).
