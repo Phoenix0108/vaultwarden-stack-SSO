@@ -171,7 +171,7 @@ chmod 600 .env
 openssl rand -base64 48   # coller le resultat dans .env -> VW_ADMIN_TOKEN=...
 nano .env                 # renseigner VW_ADMIN_TOKEN
 
-mkdir -p vw-data caddy/logs
+mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (sibling, pas enfant)
 docker compose up -d caddy
 
 # hote non domain-joined : pas de DNS pour son propre FQDN
