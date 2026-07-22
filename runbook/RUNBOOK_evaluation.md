@@ -22,7 +22,6 @@
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
 | `<URL_DU_DEPOT_GIT>` | Phase 1.0a | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
 | `<NomServeur>\<NomCA>` | Phase 1.1b (`certreq -submit -config`) | valeur constatée dans cet environnement : `SRVADTEST\vaultwardensso-srvadtest-CA` (à reconstruire depuis `certutil -ADCA` si la CA change — voir §1.1b) |
-| `<mot_de_passe_temporaire_export>` | Phase 1.1c | mot de passe fort, transmis hors bande, à usage unique pour le PFX `vault-new.pfx` (jamais dans un fichier versionné) |
 
 ## Checklist globale
 
@@ -126,20 +125,26 @@ DC> certreq -accept -machine vault-new.cer
 
 Ne pas fermer la session PowerShell entre `-new` et `-accept` : c'est justement cet écart de session/état qui a rendu `auth-vw.cer` inutilisable.
 
-**c. Exporter la clé privée (DC)** :
+**c. Exporter la clé privée (DC)**
+
+⚠️ **Ne pas taper le mot de passe du PFX à la main sur deux machines différentes.** Cinq échecs identiques de suite (`Mac verify error`, y compris avec `-legacy` qui charge correctement) pointent vers un mot de passe mal retranscrit entre la session PowerShell du DC et le prompt masqué du terminal Debian (clavier, encodage, copier-coller qui déforme un caractère) — pas vers un problème d'algorithme. La parade : générer le mot de passe, le vérifier **dans la même session DC** avant de quitter, et le transporter dans un fichier via le même canal `smbclient` déjà utilisé pour le PFX plutôt que de le retaper :
 
 ```powershell
 DC> $thumb = (Get-PfxCertificate -FilePath C:\vault-new.cer).Thumbprint
 DC> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb }
 DC> if (-not $cert) { throw "Certificat non trouve dans Cert:\LocalMachine\My juste apres -accept - verifier les erreurs de b ci-dessus avant de continuer" }
-DC> $pfxPass = ConvertTo-SecureString -String "<mot_de_passe_temporaire_export>" -AsPlainText -Force
+DC> $pfxPassPlain = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+DC> $pfxPass = ConvertTo-SecureString -String $pfxPassPlain -AsPlainText -Force
 DC> Export-PfxCertificate -Cert $cert -FilePath C:\vault-new.pfx -Password $pfxPass
+DC> (Get-PfxCertificate -FilePath C:\vault-new.pfx -Password $pfxPass).Subject
+# attendu : CN=vault.vaultwardensso.local -- si CA erreur ici, le probleme est dans l'export, pas le transfert
+DC> Set-Content -Path C:\vault-new.pfxpass.txt -Value $pfxPassPlain -NoNewline -Encoding ascii
 ```
 
-**d. Transférer (Debian)** :
+**d. Transférer, y compris le fichier mot de passe (Debian)** :
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault-new.pfx; get vault-new.cer; get adcs-root.pem'
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault-new.pfx; get vault-new.pfxpass.txt; get vault-new.cer; get adcs-root.pem'
 DEBIAN> file vault-new.cer   # verifier le format reel avant conversion
 DEBIAN> openssl x509 -in vault-new.cer -out vault-new.pem
 ```
@@ -154,21 +159,21 @@ DEBIAN> openssl x509 -in vault-new.pem -noout -subject -ext subjectAltName
 
 Si `vault.vaultwardensso.local` n'apparaît pas dans le SAN, **STOP** — ce n'est pas le bon certificat pour Caddy, ne pas continuer avec celui-ci.
 
-**f. Convertir et assembler la chaîne (Debian)** :
+**f. Convertir et assembler la chaîne (Debian)** — mot de passe lu depuis le fichier transféré, jamais retapé :
 
-⚠️ `Export-PfxCertificate` sur ce DC **Windows Server 2016** chiffre le PFX en 3DES/SHA1 (legacy) ; OpenSSL 3.x (Debian 13) désactive ces algorithmes par défaut et répond `Mac verify error: invalid password?` **même avec le bon mot de passe** — ce n'est pas forcément une erreur de saisie. Ajouter `-legacy` :
+⚠️ `Export-PfxCertificate` sur ce DC **Windows Server 2016** chiffre le PFX en 3DES/SHA1 (legacy) ; OpenSSL 3.x (Debian 13) désactive ces algorithmes par défaut et exige `-legacy` pour même tenter le déchiffrement :
 
 ```bash
-DEBIAN> openssl pkcs12 -legacy -in vault-new.pfx -nocerts -nodes -out vault.key
+DEBIAN> openssl pkcs12 -legacy -in vault-new.pfx -nocerts -nodes -out vault.key -passin file:vault-new.pfxpass.txt
 ```
 
 Si `-legacy` renvoie `unknown option` ou `provider "legacy" not found` (module absent du paquet openssl) :
 
 ```bash
-DEBIAN> openssl pkcs12 -provider legacy -provider default -in vault-new.pfx -nocerts -nodes -out vault.key
+DEBIAN> openssl pkcs12 -provider legacy -provider default -in vault-new.pfx -nocerts -nodes -out vault.key -passin file:vault-new.pfxpass.txt
 ```
 
-Si les deux échouent encore avec `Mac verify error`, alors là c'est bien un problème de mot de passe : revérifier que `<mot_de_passe_temporaire_export>` a été substitué par la vraie valeur (pas laissé littéral) dans la commande `Export-PfxCertificate` côté DC — retaper la même valeur exacte ici.
+Si ça échoue encore avec `Mac verify error` alors que §1.1c a confirmé que le PFX s'ouvre bien sur le DC avec le même mot de passe : le fichier a probablement été corrompu pendant le transfert — comparer un hash des deux côtés (`sha256sum vault-new.pfx` vs `Get-FileHash C:\vault-new.pfx` sur le DC) et retransférer si besoin, plutôt que de re-suspecter le mot de passe.
 
 ```bash
 DEBIAN> cat vault-new.pem adcs-root.pem > vault.crt
@@ -176,11 +181,15 @@ DEBIAN> openssl x509 -in adcs-root.pem -noout -fingerprint -sha1
 # attendu : 473BAAC9189D52715E3E73CED9BEC691293BED10 (comparer à la valeur de contexte)
 ```
 
-**g. Purger les fichiers transitoires côté DC** (le PFX contient la clé privée = secret ; `auth-vw.*` orphelins peuvent aussi être purgés) :
+**g. Purger les fichiers transitoires côté DC et Debian** (le PFX et le fichier mot de passe sont des secrets ; `auth-vw.*` orphelins peuvent aussi être purgés) :
 
 ```powershell
-DC> Remove-Item C:\vault-new.pfx -Force
+DC> Remove-Item C:\vault-new.pfx, C:\vault-new.pfxpass.txt -Force
 DC> Remove-Item C:\auth-vw.cer, C:\auth-vw.csr, C:\auth-vw.rsp, C:\auth-vw.pem -Force -ErrorAction SilentlyContinue   # orphelins, plus utilisables
+```
+
+```bash
+DEBIAN> rm -f vault-new.pfx vault-new.pfxpass.txt
 ```
 
 ### 1.2 Placer les fichiers dans le dépôt (DEBIAN)
