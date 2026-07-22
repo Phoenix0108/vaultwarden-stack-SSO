@@ -231,6 +231,17 @@ else
     warn ".env deja present, non modifie (idempotent) -- verifier VW_ADMIN_TOKEN manuellement si besoin"
 fi
 
+# VW_AUTHENTIK_IP alimente extra_hosts dans docker-compose.yml, qui exige une IP
+# syntaxiquement valide -- le placeholder "CHANGE_ME_IP" fait echouer docker
+# compose up en entier (meme pour un simple test Phase 1 sans Authentik encore
+# configure). Repli sur 127.0.0.1 (ne rend pas Authentik joignable, mais ne
+# bloque plus le demarrage) -- a corriger avec la vraie IP avant la Phase 5.
+if grep -q '^VW_AUTHENTIK_IP=CHANGE_ME_IP' .env 2>/dev/null; then
+    sed -i 's#^VW_AUTHENTIK_IP=CHANGE_ME_IP#VW_AUTHENTIK_IP=127.0.0.1#' .env
+    warn "VW_AUTHENTIK_IP etait CHANGE_ME_IP (invalide pour Docker) -- repli sur 127.0.0.1 dans .env"
+    warn "A corriger avec la vraie IP d'auth.vaultwardensso.local avant la Phase 5 (SSO inoperant tant que ce n'est pas fait)"
+fi
+
 mkdir -p vw-data caddy/logs
 
 # --- 7. Resolution locale (hote non domain-joined, idempotent) ---------------------
