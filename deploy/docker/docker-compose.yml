@@ -1,24 +1,27 @@
 # =============================================================================
-# OIDCWarden + Caddy - déploiement durci (Security by Design)
+# OIDCWarden + Caddy + Authentik — déploiement durci (Security by Design)
 # -----------------------------------------------------------------------------
 # Phase 5 : bascule vaultwarden/server:1.36.0 -> timshel/oidcwarden (SSO OIDC
 # Authentik + Trusted Device Encryption). Voir deploy/docs/02_risk_analysis_tde.md
 # pour l'analyse de risque TDE et la procédure break-glass AVANT SSO_ONLY=true.
+# Authentik tourne sur la MEME VM, dans ce meme docker-compose (server + worker
+# + PostgreSQL + Redis) : plus besoin d'IP LAN ni de regle firewall dediee, tout
+# passe par le reseau Docker interne. Caddy reste le seul point d'entree (tout
+# passe par Caddy, y compris pour Vaultwarden qui atteint Authentik via Caddy).
 # Hôte Docker NON joint au domaine AD : aucune résolution DNS automatique vers
-# la zone vaultwardensso.local. Tout passe par Caddy (vault.* ET auth.*) :
-# Vaultwarden résout les deux noms en interne vers le conteneur Caddy via
-# l'alias réseau ci-dessous, sans jamais avoir besoin de connaître l'IP reelle
-# d'Authentik lui-même — c'est Caddy seul qui a besoin de AUTHENTIK_UPSTREAM
-# pour reverse-proxier vers le vrai serveur Authentik.
+# la zone vaultwardensso.local. Vaultwarden résout vault.* ET auth.* en interne
+# vers le conteneur Caddy via l'alias réseau ci-dessous.
+# -----------------------------------------------------------------------------
 # Architecture réseau :
-#   - frontend         : Caddy <-> extérieur (443/80)
-#   - backend           : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy ;
-#                          Caddy y porte aussi l'alias auth.vaultwardensso.local
-#   - authentik_egress  : bridge dédié sur Caddy (pas Vaultwarden), seule sortie
-#                          autorisée = Authentik:443 (filtrée DOCKER-USER, cf.
-#                          deploy/firewall/vw-egress-fw.sh)
-# Durcissement conteneur : no-new-privileges, cap_drop ALL, read_only + tmpfs.
-# Secrets : ADMIN_TOKEN, SSO_CLIENT_SECRET via .env (hors dépôt versionné).
+#   - frontend           : Caddy <-> extérieur (443/80)
+#   - backend             : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy ;
+#                            Caddy y porte aussi les alias vault.*/auth.vaultwardensso.local
+#   - authentik_proxy     : internal=true -> UNIQUEMENT Caddy <-> authentik-server
+#                            (Vaultwarden et le reste d'Authentik n'y ont pas acces)
+#   - authentik_internal  : internal=true -> authentik-server/worker <-> postgresql/redis
+#                            (jamais expose a Caddy ni a Vaultwarden)
+# Durcissement conteneur : no-new-privileges, cap_drop ALL (sauf mention contraire),
+# read_only + tmpfs pour Vaultwarden/Caddy. Secrets via .env (hors dépôt versionné).
 # =============================================================================
 services:
   vaultwarden:
@@ -71,13 +74,6 @@ services:
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped
-    environment:
-      # URL complete (schema+hote+port) du serveur Authentik reel, ex. https://192.168.100.50
-      # ou http://192.168.100.50:9000 selon sa config TLS interne. Defaut RFC 5737
-      # (TEST-NET-1, jamais routable) applique par le Caddyfile si non renseigne :
-      # Caddy demarre normalement, auth.* renvoie une erreur de proxy tant que ce
-      # n'est pas configure, plutot que de bloquer tout le stack au demarrage.
-      AUTHENTIK_UPSTREAM: "${AUTHENTIK_UPSTREAM:-}"
     ports:
       - "443:443"
       - "443:443/udp"                # HTTP/3
@@ -94,7 +90,7 @@ services:
         aliases:
           - vault.vaultwardensso.local   # resolution interne sans dependance DNS (hote non domain-joined)
           - auth.vaultwardensso.local    # idem : Vaultwarden atteint Authentik EN PASSANT PAR Caddy
-      authentik_egress: {}               # seul Caddy a besoin de joindre le vrai Authentik (voir plus haut)
+      authentik_proxy: {}               # seul chemin de Caddy vers authentik-server (nom de service Docker)
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -106,19 +102,121 @@ services:
         limits:
           memory: 256M
           cpus: "0.5"
+    depends_on:
+      - vaultwarden
+      - authentik-server
+
+  # ---------------------------------------------------------------------------
+  # Authentik (IdP OIDC + source Kerberos SPNEGO) — meme VM, meme reseau Docker.
+  # Jamais expose directement : uniquement reversproxie par Caddy (authentik_proxy).
+  # ---------------------------------------------------------------------------
+  postgresql:
+    image: docker.io/library/postgres:16-alpine
+    container_name: authentik-postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d ${PG_DB:-authentik} -U ${PG_USER:-authentik}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - authentik-database:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: "${PG_PASS:?PG_PASS requis dans .env}"
+      POSTGRES_USER: "${PG_USER:-authentik}"
+      POSTGRES_DB: "${PG_DB:-authentik}"
+    networks:
+      - authentik_internal
+    security_opt:
+      - "no-new-privileges:true"
+
+  redis:
+    image: docker.io/library/redis:alpine
+    container_name: authentik-redis
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - authentik-redis:/data
+    networks:
+      - authentik_internal
+    security_opt:
+      - "no-new-privileges:true"
+
+  authentik-server:
+    image: "${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.5.2}"
+    container_name: authentik-server
+    restart: unless-stopped
+    command: server
+    environment: &authentik-env
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: "${PG_USER:-authentik}"
+      AUTHENTIK_POSTGRESQL__NAME: "${PG_DB:-authentik}"
+      AUTHENTIK_POSTGRESQL__PASSWORD: "${PG_PASS:?PG_PASS requis dans .env}"
+      AUTHENTIK_SECRET_KEY: "${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY requis dans .env}"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      # Pas de config SMTP : hors perimetre (pas de notifications email requises ici).
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-certs:/certs
+    networks:
+      authentik_internal: {}
+      authentik_proxy: {}             # seul point d'entree : Caddy, via ce reseau
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - "no-new-privileges:true"
+    # Pas de port publie : injoignable autrement que via Caddy (authentik_proxy).
+
+  authentik-worker:
+    image: "${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2026.5.2}"
+    container_name: authentik-worker
+    restart: unless-stopped
+    command: worker
+    environment: *authentik-env
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-certs:/certs
+    networks:
+      - authentik_internal            # pas besoin d'authentik_proxy : jamais contacte par Caddy
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    security_opt:
+      - "no-new-privileges:true"
+    # Volontairement PAS de montage /var/run/docker.sock : l'integration "outpost
+    # gere par Docker" n'est pas utilisee ici (outpost embarque suffit pour ce cas
+    # d'usage) -- monter le socket Docker donnerait un acces root-equivalent a
+    # l'hote, incompatible avec le moindre privilege de ce projet.
 
 networks:
   frontend: {}
   backend:
     internal: true                   # Vaultwarden reste injoignable hors Caddy (aucun egress WAN/LAN)
-  authentik_egress:
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: br-authentik   # nom d'IF stable pour le pare-feu hôte
-    ipam:
-      config:
-        - subnet: 172.31.10.0/29     # /29 = 6 IP utiles : surface minimale
+  authentik_proxy:
+    internal: true                   # Caddy <-> authentik-server uniquement
+  authentik_internal:
+    internal: true                   # authentik-server/worker <-> postgresql/redis uniquement
 
 volumes:
   caddy-data: {}
   caddy-config: {}
+  authentik-database: {}
+  authentik-redis: {}
+  authentik-media: {}
+  authentik-templates: {}
+  authentik-certs: {}

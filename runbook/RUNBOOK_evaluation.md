@@ -6,7 +6,7 @@
 >
 > **Légende des pastilles** : 🔵 = à exécuter sur le **DC** (PowerShell 5.1 élevé, `192.168.100.76`) · 🟢 = à exécuter sur l'**hôte Docker** (bash, `192.168.100.89`) · 🟠 = à exécuter sur un **poste client de test** domain-joined (PowerShell ou invite de commandes). Une étape sans pastille est une lecture/vérification, pas une commande à taper.
 >
-> **L'hôte Docker (`192.168.100.89`) n'est PAS joint au domaine AD.** Conséquences : aucune résolution DNS automatique vers `vaultwardensso.local`. **Tout passe par Caddy** : `vault.*` ET `auth.*` sont résolus en interne par Docker vers le conteneur Caddy (alias réseau sur `backend`, pas de dépendance DNS) — Vaultwarden n'a jamais besoin de connaître l'IP réelle d'Authentik, seul Caddy la connaît (`AUTHENTIK_UPSTREAM`) pour reverse-proxier vers le vrai serveur. `smbclient` fonctionne sans domain join mais le compte est qualifié par son domaine (`'VAULTWARDENSSO\Administrator'`) ; tout ce qui est SPNEGO/Negotiate (Phase 3, Phase 4) se teste **uniquement depuis un poste 🟠 domain-joined**, jamais depuis le serveur Debian.
+> **L'hôte Docker (`192.168.100.89`) n'est PAS joint au domaine AD.** Conséquences : aucune résolution DNS automatique vers `vaultwardensso.local`. **Authentik tourne sur cette même VM** (server + worker + PostgreSQL + Redis, dans ce même `docker-compose.yml`) : plus d'IP LAN ni de règle firewall à gérer, Caddy le rejoint directement par nom de service Docker (`authentik-server`). **Tout passe par Caddy** : `vault.*` ET `auth.*` sont résolus en interne par Docker vers le conteneur Caddy (alias réseau sur `backend`). `smbclient` fonctionne sans domain join mais le compte est qualifié par son domaine (`'VAULTWARDENSSO\Administrator'`) ; tout ce qui est SPNEGO/Negotiate (Phase 3, Phase 4) se teste **uniquement depuis un poste 🟠 domain-joined**, jamais depuis le serveur Debian.
 
 ## Placeholders à substituer avant de commencer
 
@@ -14,8 +14,7 @@
 |---|---|---|
 | `<URL_DU_DEPOT_GIT>` | Phase 1, bloc DEBIAN #1 | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
 | `<CLIENT_SUBNET>` | `deploy/authentik/kerberos-sso-blueprint.yaml` | CIDR du LAN intranet (ex. `192.168.100.0/24`) |
-| `<AUTHENTIK_IP_REELLE>` | `deploy/firewall/vw-egress-fw.sh` | IP réelle d'`auth.vaultwardensso.local`, utilisée par la règle firewall de l'egress de **Caddy** (pas Vaultwarden) |
-| `AUTHENTIK_UPSTREAM` | `.env` (Phase 5) | URL complète du vrai serveur Authentik (ex. `https://192.168.100.50`) — seul Caddy en a besoin, pour reverse-proxier `auth.vaultwardensso.local` |
+| `PG_PASS` / `AUTHENTIK_SECRET_KEY` | `.env` | générés automatiquement par `install-vault-cert.sh` si laissés au placeholder — aucune saisie manuelle requise |
 | `<slug>` | `.env` (`VW_SSO_AUTHORITY`), doc Authentik | slug du Provider OIDC Vaultwarden créé côté Authentik |
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
@@ -243,7 +242,7 @@ smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'del authenti
 ```bash
 sed -i 's#<CLIENT_SUBNET>#192.168.100.0/24#' deploy/authentik/kerberos-sso-blueprint.yaml
 docker exec -i authentik-server ak import_blueprint < deploy/authentik/kerberos-sso-blueprint.yaml
-# adapter le nom du conteneur/serveur Authentik reel -- sinon import GUI via Admin -> System -> Blueprints -> Import
+# authentik-server = nom du service Docker (meme VM, meme docker-compose.yml) -- pas d'adaptation necessaire
 
 base64 -w0 authentik.keytab > authentik.keytab.b64
 ```
@@ -302,13 +301,15 @@ Pour un déploiement fleet (pas juste le poste de test), convertir la copie Fire
 
 🖱️ DevTools navigateur → en-tête `Authorization: Negotiate` sur la requête vers `auth.vaultwardensso.local`. 🖱️ Firefox : `about:policies` → `NegotiateAuth.Trusted` doit lister l'URL Authentik.
 
+🖱️ Signet géré (Chrome `chrome://policy` / Edge `edge://policy` → `ManagedBookmarks`/`ManagedFavorites`, Firefox `about:policies` → `Bookmarks`) : cliquer le signet "Vaultwarden (SSO)" → aucun écran email/identifiant affiché, redirection SPNEGO immédiate vers `https://vault.vaultwardensso.local/#/sso?identifier=vaultwardensso`. Ce lien fonctionne indépendamment de `SSO_ONLY` (c'est un raccourci client, pas une restriction serveur) — testable dès maintenant en le collant manuellement dans la barre d'adresse, sans attendre le déploiement GPO fleet.
+
 ---
 
 ## Phase 5 — Bascule OIDCWarden + TDE
 
-**Fichiers** : `deploy/docker/Dockerfile`, `deploy/docker/docker-compose.yml`, `deploy/docker/.env.example`, `deploy/firewall/vw-egress-fw.sh`, `deploy/systemd/vw-egress-fw.service`, `docs/02_risk_analysis_tde.md`
+**Fichiers** : `deploy/docker/Dockerfile`, `deploy/docker/docker-compose.yml`, `deploy/docker/.env.example`, `docs/02_risk_analysis_tde.md`
 
-### 🟢 DEBIAN — bloc 1 : backup, firewall, secrets
+### 🟢 DEBIAN — bloc 1 : backup, secrets
 
 ```bash
 cd deploy/docker
@@ -319,21 +320,10 @@ sqlite3 /tmp/restore-test/vw-data/db.sqlite3 "PRAGMA integrity_check;"
 # attendu : ok
 rm -rf /tmp/restore-test
 
-cd ../..
-sed -i 's/__AUTHENTIK_IP__/<AUTHENTIK_IP_REELLE>/' deploy/firewall/vw-egress-fw.sh
-sudo cp deploy/firewall/vw-egress-fw.sh /usr/local/sbin/
-sudo chmod 700 /usr/local/sbin/vw-egress-fw.sh
-sudo cp deploy/systemd/vw-egress-fw.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vw-egress-fw.service
-sudo iptables -L DOCKER-USER -n -v --line-numbers   # gate visuel
-
-nano deploy/docker/.env
-# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY, AUTHENTIK_UPSTREAM
+nano .env
+# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY
 # (VW_SSO_AUTHORITY = coller VERBATIM l'issuer depuis .../application/o/<slug>/.well-known/openid-configuration)
-# (AUTHENTIK_UPSTREAM = URL complete, ex. https://<AUTHENTIK_IP_REELLE> -- utilisee par Caddy uniquement,
-#  Vaultwarden n'en a pas besoin puisque tout passe par Caddy)
-docker compose up -d caddy   # recharge Caddy avec AUTHENTIK_UPSTREAM
+# PG_PASS / AUTHENTIK_SECRET_KEY deja generes par install-vault-cert.sh en Phase 1 -- rien a faire ici
 ```
 
 ### 🟢 DEBIAN — bloc 2 : build et déploiement

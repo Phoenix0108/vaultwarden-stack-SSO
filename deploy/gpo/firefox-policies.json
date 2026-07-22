@@ -2,6 +2,14 @@
   "policies": {
     "NegotiateAuth": {
       "Trusted": ["https://auth.vaultwardensso.local"]
-    }
+    },
+    "Bookmarks": [
+      {
+        "Title": "Vaultwarden (SSO)",
+        "URL": "https://vault.vaultwardensso.local/#/sso?identifier=vaultwardensso",
+        "Placement": "toolbar",
+        "Folder": "Vaultwarden"
+      }
+    ]
   }
 }

@@ -10,7 +10,7 @@ Livrables pour un SSO passwordless intranet : ouverture de session Windows (Kerb
 |---|---|
 | DC (AD DS + AD CS + DNS) | Windows Server 2016, `192.168.100.76` |
 | Hôte Docker | Debian 13, `192.168.100.89` |
-| IdP OIDC | Authentik, `auth.vaultwardensso.local` |
+| IdP OIDC | Authentik, `auth.vaultwardensso.local` (même VM/hôte Docker que Vaultwarden et Caddy, déployé dans le même `docker-compose.yml`) |
 | SP | Vaultwarden 1.36.0 → bascule prévue OIDCWarden (Phase 5) |
 | CA | AD CS Enterprise Root, thumbprint `473BAAC9189D52715E3E73CED9BEC691293BED10` |
 
@@ -19,28 +19,24 @@ Livrables pour un SSO passwordless intranet : ouverture de session Windows (Kerb
 ```
 deploy/
 ├── caddy/
-│   ├── Caddyfile                     # reverse proxy TLS, chaîne AD CS (Phase 1)
+│   ├── Caddyfile                     # reverse proxy TLS unique pour vault.* ET auth.* (Phase 1, "tout passe par Caddy")
 │   └── certs/                        # vault.crt + vault.key (non versionnés, voir .gitignore)
 ├── docker/
-│   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden (Phases 1 et 5)
+│   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden + Authentik (server/worker/PostgreSQL/Redis) — même VM, même compose
 │   ├── Dockerfile                    # image dérivée : embarque la CA AD CS, version OIDCWarden épinglée
 │   └── .env.example                  # secrets (à copier en .env, chmod 600)
 ├── tls/
-│   ├── New-VaultCertDC.ps1           # génère + exporte le certificat vault.* + la racine AD CS (Phase 1, DC)
+│   ├── New-VaultCertDC.ps1           # génère + exporte le certificat vault.*/auth.* + la racine AD CS (Phase 1, DC)
 │   └── install-vault-cert.sh         # transfert, conversion, installation, déploiement + gates (Phase 1, Debian)
 ├── kerberos/
 │   └── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
 ├── authentik/
 │   ├── kerberos-sso-blueprint.yaml   # Source Kerberos + policy de redirection (Phase 3)
 │   └── README.md                     # étapes manuelles (upload keytab) + gates
-├── gpo/
-│   ├── Deploy-KerberosSSO-GPO.ps1    # GPO navigateurs + pré-provisioning Bitwarden (Phase 4)
-│   ├── firefox-policies.json         # network.negotiate-auth.trusted-uris
-│   └── Deploy-BitwardenClients.reg   # variante manuelle poste par poste
-├── firewall/
-│   └── vw-egress-fw.sh               # allow-list egress DOCKER-USER vers Authentik (Phase 5)
-└── systemd/
-    └── vw-egress-fw.service          # persistance After=docker.service
+└── gpo/
+    ├── Deploy-KerberosSSO-GPO.ps1    # GPO navigateurs + pré-provisioning Bitwarden (Phase 4)
+    ├── firefox-policies.json         # network.negotiate-auth.trusted-uris
+    └── Deploy-BitwardenClients.reg   # variante manuelle poste par poste
 
 docs/
 ├── 01_architecture.md                # flux, séquence d'authentification, plans réseau
