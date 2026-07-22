@@ -236,18 +236,27 @@ else
 fi
 
 # PG_PASS / AUTHENTIK_SECRET_KEY : purs secrets d'entropie (Authentik meme VM,
-# meme docker-compose) -- generes automatiquement si encore au placeholder,
-# que .env soit neuf ou preexistant (upgrade depuis une version sans Authentik).
-if grep -q '^PG_PASS=CHANGE_ME' .env 2>/dev/null; then
-    pgpass=$(openssl rand -base64 36 | tr -d '\n=/+' | head -c 48)
-    sed -i "s#^PG_PASS=.*#PG_PASS=${pgpass}#" .env
-    ok "PG_PASS genere"
-fi
-if grep -q '^AUTHENTIK_SECRET_KEY=CHANGE_ME' .env 2>/dev/null; then
-    secret=$(openssl rand -base64 60 | tr -d '\n')
-    sed -i "s#^AUTHENTIK_SECRET_KEY=.*#AUTHENTIK_SECRET_KEY=${secret}#" .env
-    ok "AUTHENTIK_SECRET_KEY genere"
-fi
+# meme docker-compose) -- generes automatiquement s'ils sont encore au
+# placeholder CHANGE_ME, OU meme totalement ABSENTS de .env (cas vecu : un
+# .env cree par une execution anterieure a l'ajout d'Authentik a ce depot ne
+# contient pas ces lignes du tout -- un simple grep sur "CHANGE_ME" ne les
+# detecte pas et docker compose echoue alors sur "variable ... is missing a
+# value"). ensure_secret couvre les deux cas : absent -> ajoute, CHANGE_ME ->
+# remplace ; sinon laisse tel quel (idempotent).
+ensure_secret() {
+    local var="$1" gen_cmd="$2" val
+    if ! grep -q "^${var}=" .env 2>/dev/null; then
+        val="$(eval "$gen_cmd")"
+        printf '%s=%s\n' "$var" "$val" >> .env
+        ok "$var absent de .env (ancienne installation), ajoute et genere"
+    elif grep -q "^${var}=CHANGE_ME" .env 2>/dev/null; then
+        val="$(eval "$gen_cmd")"
+        sed -i "s#^${var}=.*#${var}=${val}#" .env
+        ok "$var genere (placeholder remplace)"
+    fi
+}
+ensure_secret PG_PASS "openssl rand -base64 36 | tr -d '\n=/+' | head -c 48"
+ensure_secret AUTHENTIK_SECRET_KEY "openssl rand -base64 60 | tr -d '\n'"
 
 mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (deploy/caddy/ est un sibling)
 
@@ -262,6 +271,15 @@ for h in "$SPN_HOSTNAME" "$AUTH_HOSTNAME"; do
 done
 
 # --- 8. Deploiement + gates ----------------------------------------------------------
+# Down avant up : la topologie (services/reseaux) peut avoir change entre deux
+# executions de ce script (ex. ajout d'Authentik et de ses reseaux internal=true) --
+# repartir d'une ancienne installation encore levee peut laisser des conteneurs/
+# reseaux perimes en conflit. --remove-orphans nettoie les services retires du
+# compose. Ne touche jamais aux volumes nommes (pas de -v/--volumes) : la base
+# Authentik (authentik-database) et vw-data (bind mount) sont preservees.
+info "Arret de l'ancienne installation (si presente, sans toucher aux volumes/donnees)"
+docker compose down --remove-orphans || warn "docker compose down : rien a arreter ou erreur mineure -- poursuite"
+
 info "Build et demarrage de la stack"
 docker compose up -d --build
 ok "Stack demarree"
