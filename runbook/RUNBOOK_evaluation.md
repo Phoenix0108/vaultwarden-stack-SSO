@@ -72,6 +72,16 @@ Inventaire du `C:\` du DC à ce stade (cf. capture) :
 | `adfs_cert.cer`, `adfs_cert.rsp`, `adfs_req.csr`, `adfs_req.inf` | ⚠️ Artefacts de l'ancien projet AD FS (archivé dans `legacy/`) — **ne pas utiliser**, à purger en Phase 6. |
 | `caddy-internal-root.crt` | ⚠️ Résidu d'un test antérieur avec `tls internal` — **ne pas utiliser**, à purger en Phase 6. |
 
+> **Si `adcs-root.cer`/`.pem`/`.b64` a disparu du DC** (supprimé par erreur lors d'un nettoyage, `smbclient get adcs-root.pem` renvoie `NT_STATUS_OBJECT_NAME_NOT_FOUND`) : 🔵 le régénérer depuis le magasin racine via son empreinte connue plutôt que de tout réémettre :
+> ```powershell
+> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '473BAAC9189D52715E3E73CED9BEC691293BED10' }) -FilePath C:\adcs-root.cer -Type CERT
+> ```
+> 🟢 puis, côté Debian (`Export-Certificate -Type CERT` sort du DER brut, contrairement à `certreq -submit` vu en §1.1b — `-inform der` est correct ici) :
+> ```bash
+> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get adcs-root.cer'
+> openssl x509 -inform der -in adcs-root.cer -out adcs-root.pem
+> ```
+
 **a. 🔵 Tenter de lier la clé privée au certificat déjà émis**
 
 ⚠️ `certreq -accept` **sans contexte explicite** cherche la requête en attente dans le magasin **utilisateur** par défaut sur ce build. Or l'INF d'origine porte `MachineKeySet = TRUE` : la clé privée pendante est dans le magasin **machine**, d'où le premier échec (`-user | -machine argument`). **Passer `-machine` explicitement** :
@@ -197,8 +207,9 @@ rm -f vault-new.pfx vault-new.pfxpass.txt
 
 ### 1.2 🟢 Placer les fichiers dans le dépôt
 
+Depuis la racine du dépôt (déjà la position courante si vous n'avez pas quitté le répertoire depuis §1.0a — pas de `cd` supplémentaire si c'est le cas, `cd vaultwarden-stack-SSO` échouerait avec « Aucun fichier ou dossier de ce nom » puisque vous y êtes déjà) :
+
 ```bash
-cd vaultwarden-stack-SSO
 sudo install -o root -g root -m 644 vault.crt  deploy/caddy/certs/vault.crt
 sudo install -o root -g root -m 600 vault.key  deploy/caddy/certs/vault.key
 sudo install -o root -g root -m 644 adcs-root.pem deploy/docker/adcs-root.crt
