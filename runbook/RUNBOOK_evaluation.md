@@ -37,16 +37,18 @@
 
 **Hypothèse** : DC et hôte Docker repartent de zéro — aucun dépôt cloné, aucune stack déployée, aucun certificat existant.
 
-> **Raccourci scripté (recommandé)** : `deploy/tls/New-VaultCertDC.ps1` (🔵 DC) et `deploy/tls/install-vault-cert.sh` (🟢 Debian) automatisent l'intégralité des blocs ci-dessous — idempotents, avec retries réseau et vérifications à chaque étape (voir leurs en-têtes). Les blocs manuels qui suivent restent la référence si un script échoue et qu'il faut diagnostiquer étape par étape.
+> **Raccourci scripté (recommandé)** : `deploy/tls/New-VaultCertDC.ps1` (🔵 DC) et `deploy/tls/install-vault-cert.sh` (🟢 Debian) automatisent l'intégralité des blocs ci-dessous — idempotents, avec retries réseau et vérifications à chaque étape (voir leurs en-têtes). Le script Debian installe aussi ses propres prérequis (clone du dépôt, Docker, smbclient, openssl) s'ils manquent, donc il peut se lancer sur un serveur vraiment vierge. Les blocs manuels qui suivent restent la référence si un script échoue et qu'il faut diagnostiquer étape par étape.
 > ```powershell
 > # 🔵 DC
 > cd C:\vaultwarden-stack-SSO\deploy\tls
 > .\New-VaultCertDC.ps1
 > ```
 > ```bash
-> # 🟢 Debian, une fois le transfert SMB possible (credentials interactifs par defaut,
-> # ou SMB_PASSWORD=... en variable d'environnement pour un usage non interactif)
+> # 🟢 Debian -- si le dépôt n'est pas encore cloné, ajouter REPO_URL=<url_du_depot> devant.
+> # Credentials SMB interactifs par defaut, ou SMB_PASSWORD=... pour un usage non interactif.
 > ./deploy/tls/install-vault-cert.sh
+> # ou, sur un serveur vierge, en une commande (copier d'abord ce fichier sur le serveur) :
+> # REPO_URL=<url_du_depot> ./install-vault-cert.sh
 > ```
 
 ### 🔵 DC — bloc 1 : générer la CSR, l'accepter, exporter clé + racine

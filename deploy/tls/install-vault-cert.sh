@@ -1,27 +1,40 @@
 #!/usr/bin/env bash
 # =============================================================================
 # install-vault-cert.sh
-# Recupere le certificat + la racine AD CS generes par New-VaultCertDC.ps1 sur
-# le DC, les convertit, les assemble, les installe dans le depot, deploie
-# Caddy/Vaultwarden et valide les gates. A executer depuis n'importe ou dans
-# le depot cloné, sur l'hote Docker (hors domaine AD).
+# Provisionne l'hote Docker de zero (depot, Docker, paquets requis), recupere
+# le certificat + la racine AD CS generes par New-VaultCertDC.ps1 sur le DC,
+# les convertit, les assemble, les installe dans le depot, deploie
+# Caddy/Vaultwarden et valide les gates. Se lance depuis n'importe ou : sans
+# depot present, il le clone (REPO_URL requis) ; depuis un depot deja cloné,
+# il l'utilise tel quel.
 # -----------------------------------------------------------------------------
-# Resilient : retries avec backoff sur le transfert SMB (reseau lab peu fiable
-# possible) ; detection automatique du fallback openssl -legacy vs -provider ;
-# verification a chaque etape (SAN, empreinte SHA-1, gates TLS) avec arret net
-# et message diagnostique si un controle echoue -- jamais de contournement
-# silencieux ; nettoyage systematique des fichiers secrets transitoires meme
-# en cas d'echec (trap EXIT) ; idempotent sur .env et /etc/hosts (ne les
-# ecrase pas s'ils existent deja).
+# Resilient : installe les paquets manquants (git, docker, smbclient, openssl)
+# plutot que d'echouer dessus ; retries avec backoff sur le transfert SMB
+# (reseau lab peu fiable possible) ; detection automatique du fallback
+# openssl -legacy vs -provider ; verification a chaque etape (SAN, empreinte
+# SHA-1, gates TLS) avec arret net et message diagnostique si un controle
+# echoue -- jamais de contournement silencieux ; nettoyage systematique des
+# fichiers secrets transitoires meme en cas d'echec (trap EXIT) ; idempotent
+# sur le clone, l'installation des paquets, .env et /etc/hosts (ne repete ni
+# n'ecrase ce qui est deja en place).
 # -----------------------------------------------------------------------------
 # Menace couverte : cle privee et mot de passe PFX jamais loggues ; ADMIN_TOKEN
 # genere avec suffisamment d'entropie (openssl rand) si .env n'existe pas
-# encore ; verification TLS jamais desactivee (-CAfile, jamais -k/--insecure).
-# Privilege minimal : sudo requis uniquement pour install/tee vers des chemins
-# root-owned deja definis par docker-compose.yml, rien d'autre.
+# encore ; verification TLS jamais desactivee (-CAfile, jamais -k/--insecure) ;
+# paquets installes depuis le depot officiel Docker (cle GPG verifiee), jamais
+# via un script tiers non verifie.
+# Privilege minimal : sudo requis pour l'installation de paquets systeme et
+# pour install/tee vers des chemins root-owned deja definis par
+# docker-compose.yml -- rien au-dela de ce perimetre.
 # Residuel : si SMB_PASSWORD est fourni en variable d'environnement, il reste
 # brievement visible dans la table des process (ps) le temps de l'appel
 # smbclient -- preferer la saisie interactive si le contexte le permet.
+# -----------------------------------------------------------------------------
+# Variables d'environnement reconnues (toutes optionnelles sauf REPO_URL si le
+# depot n'est pas deja cloné) :
+#   REPO_URL, REPO_DIR (def. vaultwarden-stack-SSO), REPO_BRANCH
+#   DC_IP, DC_USER, SMB_PASSWORD, SMB_RETRIES
+#   SPN_HOSTNAME, ROOT_THUMBPRINT
 # =============================================================================
 set -euo pipefail
 
@@ -30,12 +43,52 @@ DC_USER="${DC_USER:-VAULTWARDENSSO\\Administrator}"
 SPN_HOSTNAME="${SPN_HOSTNAME:-vault.vaultwardensso.local}"
 ROOT_THUMBPRINT="${ROOT_THUMBPRINT:-473BAAC9189D52715E3E73CED9BEC691293BED10}"
 SMB_RETRIES="${SMB_RETRIES:-3}"
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+REPO_URL="${REPO_URL:-}"
+REPO_DIR="${REPO_DIR:-vaultwarden-stack-SSO}"
+REPO_BRANCH="${REPO_BRANCH:-claude/sso-kerberos-vaultwarden-ad-rzg3w0}"
 
 info(){ echo -e "\033[36m[INFO]\033[0m $*"; }
 ok(){   echo -e "\033[32m[ OK ]\033[0m $*"; }
 warn(){ echo -e "\033[33m[WARN]\033[0m $*"; }
 fail(){ echo -e "\033[31m[FAIL]\033[0m $*" >&2; exit 1; }
+
+apt_install() {
+    warn "$* absent, installation via apt-get"
+    sudo apt-get update -qq
+    sudo apt-get install -y "$@"
+}
+
+command -v git >/dev/null || apt_install git
+
+# --- 0. Depot : detecter, ou cloner si absent ---------------------------------------
+if git -C . rev-parse --show-toplevel >/dev/null 2>&1 \
+        && [ -f "$(git rev-parse --show-toplevel)/deploy/tls/install-vault-cert.sh" ]; then
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    info "Depot deja present : $REPO_ROOT"
+elif [ -d "$REPO_DIR/.git" ]; then
+    REPO_ROOT="$(cd "$REPO_DIR" && pwd)"
+    info "Depot deja clone : $REPO_ROOT"
+else
+    [ -n "$REPO_URL" ] || fail "Depot absent et REPO_URL non renseigne -- relancer avec REPO_URL=<url_du_depot> $0"
+    info "Clonage du depot ($REPO_URL)"
+    git clone "$REPO_URL" "$REPO_DIR"
+    REPO_ROOT="$(cd "$REPO_DIR" && pwd)"
+fi
+cd "$REPO_ROOT"
+git checkout "$REPO_BRANCH" 2>/dev/null || warn "Checkout $REPO_BRANCH ignore (branche absente ou deja dessus)"
+
+# Relais vers la copie du depot (a jour, avec tous les correctifs) si ce script
+# a ete lance en standalone avant que le depot n'existe -- evite d'executer une
+# copie perimee une fois le vrai depot disponible. Garde anti-boucle : _VAULT_CERT_REEXEC.
+CANONICAL="$REPO_ROOT/deploy/tls/install-vault-cert.sh"
+if [ -z "${_VAULT_CERT_REEXEC:-}" ] && [ -f "$CANONICAL" ] \
+        && [ "$(readlink -f "$0" 2>/dev/null || echo "$0")" != "$(readlink -f "$CANONICAL")" ]; then
+    info "Relais vers la copie du depot : $CANONICAL"
+    exec env _VAULT_CERT_REEXEC=1 REPO_URL="$REPO_URL" REPO_DIR="$REPO_DIR" REPO_BRANCH="$REPO_BRANCH" \
+        DC_IP="$DC_IP" DC_USER="$DC_USER" SPN_HOSTNAME="$SPN_HOSTNAME" \
+        ROOT_THUMBPRINT="$ROOT_THUMBPRINT" SMB_RETRIES="$SMB_RETRIES" \
+        bash "$CANONICAL" "$@"
+fi
 
 TMP_FILES=(vault-new.pfx vault-new.pfxpass.txt vault-new.cer vault-new.pem adcs-root.cer adcs-root.pem)
 cleanup() {
@@ -44,11 +97,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cd "$REPO_ROOT"
+# --- 0b. Paquets requis : installer ce qui manque plutot que d'echouer dessus ------
+command -v smbclient >/dev/null || apt_install smbclient
+command -v openssl   >/dev/null || apt_install openssl
 
-for bin in smbclient openssl docker; do
-    command -v "$bin" >/dev/null || fail "$bin absent (installer avant de continuer)"
-done
+if ! command -v docker >/dev/null; then
+    warn "Docker absent, installation depuis le depot officiel"
+    curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+        | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+    sudo apt-get update -qq
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    sudo systemctl enable --now docker
+    ok "Docker installe"
+fi
+docker compose version >/dev/null 2>&1 || apt_install docker-compose-plugin
+ok "Prerequis systeme presents : git, smbclient, openssl, docker (+ plugin compose)"
 
 # --- 1. Transfert SMB avec retries ------------------------------------------------
 if [ -n "${SMB_PASSWORD:-}" ]; then
