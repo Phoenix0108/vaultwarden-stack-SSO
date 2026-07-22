@@ -136,10 +136,11 @@ if (-not $cert) { throw "Certificat non trouve dans Cert:\LocalMachine\My juste 
 $pfxPassPlain = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
 $pfxPass = ConvertTo-SecureString -String $pfxPassPlain -AsPlainText -Force
 Export-PfxCertificate -Cert $cert -FilePath C:\vault-new.pfx -Password $pfxPass
-(Get-PfxCertificate -FilePath C:\vault-new.pfx -Password $pfxPass).Subject
+(New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('C:\vault-new.pfx', $pfxPassPlain)).Subject
 # attendu : CN=vault.vaultwardensso.local -- si ca erreur ici, le probleme est dans l'export, pas le transfert
 Set-Content -Path C:\vault-new.pfxpass.txt -Value $pfxPassPlain -NoNewline -Encoding ascii
 ```
+⚠️ `Get-PfxCertificate -Password` n'existe pas sur ce PowerShell 5.1/Server 2016 (`A parameter cannot be found that matches parameter name 'Password'` — le paramètre a été ajouté dans des versions plus récentes du module PKI). Le constructeur .NET `X509Certificate2` ci-dessus fait la même vérification (ouvrir le PFX avec le mot de passe et lire le sujet) sans dépendre de la version du cmdlet.
 
 **d. 🟢 Transférer, y compris le fichier mot de passe**
 
