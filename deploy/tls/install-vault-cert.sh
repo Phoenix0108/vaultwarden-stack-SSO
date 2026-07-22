@@ -91,6 +91,16 @@ fi
 cd "$REPO_ROOT"
 git checkout "$REPO_BRANCH" 2>/dev/null || warn "Checkout $REPO_BRANCH ignore (branche absente ou deja dessus)"
 
+# Mise a jour non destructive : un clone deja present peut dater d'une execution
+# precedente et manquer des correctifs plus recents (vecu en pratique -- le
+# relais ci-dessous executait une copie perimee sans ce pull). --ff-only refuse
+# proprement (sans rien ecraser) s'il y a des modifications locales sur des
+# fichiers suivis par git ; les fichiers ignores (.env, certs, vw-data) ne sont
+# de toute facon jamais concernes.
+info "Mise a jour du depot (git pull --ff-only)"
+git pull --ff-only origin "$REPO_BRANCH" --quiet 2>/dev/null \
+    || warn "git pull --ff-only impossible (modifications locales, pas de reseau, ou deja a jour) -- poursuite avec la copie locale telle quelle"
+
 # Relais vers la copie du depot (a jour, avec tous les correctifs) si ce script
 # a ete lance en standalone avant que le depot n'existe -- evite d'executer une
 # copie perimee une fois le vrai depot disponible. Garde anti-boucle : _VAULT_CERT_REEXEC.
