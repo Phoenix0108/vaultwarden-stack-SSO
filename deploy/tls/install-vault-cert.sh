@@ -258,6 +258,12 @@ ensure_secret() {
 ensure_secret PG_PASS "openssl rand -base64 36 | tr -d '\n=/+' | head -c 48"
 ensure_secret AUTHENTIK_SECRET_KEY "openssl rand -base64 60 | tr -d '\n'"
 
+# VW_SSO_ONLY : pas un secret d'entropie mais meme probleme que ci-dessus -- un
+# .env cree avant l'ajout de cette variable a .env.example ne la contient pas
+# du tout. Defaut sur false (jamais true automatiquement : ne jamais couper le
+# fallback master password sans validation explicite d'un login SSO reussi).
+ensure_secret VW_SSO_ONLY "echo false"
+
 mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (deploy/caddy/ est un sibling)
 
 # --- 7. Resolution locale (hote non domain-joined, idempotent) ---------------------
