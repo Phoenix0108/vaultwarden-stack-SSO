@@ -22,13 +22,21 @@
 ---------------------------------------------------------------------------------
  EXEMPLE :
   .\New-VaultCertDC.ps1
-  .\New-VaultCertDC.ps1 -CaConfig 'SRVADTEST\vaultwardensso-srvadtest-CA'
+  .\New-VaultCertDC.ps1 -CaConfig 'AUTRE-SERVEUR\Autre-CA'   # si la CA a change
+---------------------------------------------------------------------------------
+ -CaConfig est epingle a la valeur connue de cet environnement par defaut (pas
+ de decouverte automatique : une version precedente parsait `certutil -ADCA`
+ par regex et produisait un config string tronque -- ex. "S\v" -- provoquant
+ RPC_S_SERVER_UNAVAILABLE sur -submit ; mieux vaut une valeur fixe, correcte
+ et documentee qu'une decouverte fragile). Si la CA change, relancer avec
+ -CaConfig explicite : `certutil -ADCA` donne le nom de la CA (premier CN= de
+ cACertificateDN) et le nom de la machine CA (entree ACL <DOMAINE>\<MACHINE>$).
 =================================================================================
 #>
 [CmdletBinding()]
 param(
     [string] $SpnHostname = 'vault.vaultwardensso.local',
-    [string] $CaConfig,
+    [string] $CaConfig = 'SRVADTEST\vaultwardensso-srvadtest-CA',
     [string] $CertTemplate = 'WebServer',
     [string] $RootThumbprint = '473BAAC9189D52715E3E73CED9BEC691293BED10',
     [string] $WorkDir = 'C:\',
@@ -83,27 +91,11 @@ _continue_ = "dns=$SpnHostname&"
     Fail "Etape CSR : $_"
 }
 
-# --- 2. Decouverte de la CA (ou -CaConfig fourni) --------------------------------
-if (-not $CaConfig) {
-    try {
-        Info "Decouverte de la CA (certutil -ADCA)"
-        $adca = certutil -ADCA 2>&1 | Out-String
-        $caNames = [regex]::Matches($adca, 'cACertificateDN\s*=\s*CN=([^,]+)') | ForEach-Object { $_.Groups[1].Value.Trim() }
-        $machineNames = [regex]::Matches($adca, '\\([A-Za-z0-9_\-]+)\$') | ForEach-Object { $_.Groups[1].Value }
-        if ($caNames.Count -eq 1 -and $machineNames.Count -ge 1) {
-            $CaConfig = "$($machineNames[0])\$($caNames[0])"
-            Ok "CA decouverte automatiquement : $CaConfig"
-        } elseif ($caNames.Count -gt 1) {
-            Fail "Plusieurs CA detectees ($($caNames -join ', ')) -- fournir -CaConfig explicitement pour lever l'ambiguite."
-        } else {
-            Fail "Decouverte automatique de la CA impossible -- fournir -CaConfig '<Serveur>\<NomCA>' explicitement (voir la sortie de certutil -ADCA ci-dessus)."
-        }
-    } catch {
-        Fail "Decouverte CA : $_"
-    }
-} else {
-    Info "CA fournie explicitement : $CaConfig"
-}
+# --- 2. CA cible -------------------------------------------------------------------
+# Valeur epinglee (parametre -CaConfig), pas de decouverte automatique -- voir
+# l'en-tete du script pour pourquoi (regex sur certutil -ADCA s'est averee
+# fragile en pratique).
+Info "CA cible : $CaConfig"
 
 # --- 3. Submit puis Accept, meme session ------------------------------------------
 try {
