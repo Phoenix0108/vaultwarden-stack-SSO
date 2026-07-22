@@ -156,8 +156,21 @@ Si `vault.vaultwardensso.local` n'apparaît pas dans le SAN, **STOP** — ce n'e
 
 **f. Convertir et assembler la chaîne (Debian)** :
 
+⚠️ `Export-PfxCertificate` sur ce DC **Windows Server 2016** chiffre le PFX en 3DES/SHA1 (legacy) ; OpenSSL 3.x (Debian 13) désactive ces algorithmes par défaut et répond `Mac verify error: invalid password?` **même avec le bon mot de passe** — ce n'est pas forcément une erreur de saisie. Ajouter `-legacy` :
+
 ```bash
-DEBIAN> openssl pkcs12 -in vault-new.pfx -nocerts -nodes -out vault.key
+DEBIAN> openssl pkcs12 -legacy -in vault-new.pfx -nocerts -nodes -out vault.key
+```
+
+Si `-legacy` renvoie `unknown option` ou `provider "legacy" not found` (module absent du paquet openssl) :
+
+```bash
+DEBIAN> openssl pkcs12 -provider legacy -provider default -in vault-new.pfx -nocerts -nodes -out vault.key
+```
+
+Si les deux échouent encore avec `Mac verify error`, alors là c'est bien un problème de mot de passe : revérifier que `<mot_de_passe_temporaire_export>` a été substitué par la vraie valeur (pas laissé littéral) dans la commande `Export-PfxCertificate` côté DC — retaper la même valeur exacte ici.
+
+```bash
 DEBIAN> cat vault-new.pem adcs-root.pem > vault.crt
 DEBIAN> openssl x509 -in adcs-root.pem -noout -fingerprint -sha1
 # attendu : 473BAAC9189D52715E3E73CED9BEC691293BED10 (comparer à la valeur de contexte)
