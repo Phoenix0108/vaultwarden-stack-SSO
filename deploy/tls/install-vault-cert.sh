@@ -114,6 +114,8 @@ trap cleanup EXIT
 # --- 0b. Paquets requis : installer ce qui manque plutot que d'echouer dessus ------
 command -v smbclient >/dev/null || apt_install smbclient
 command -v openssl   >/dev/null || apt_install openssl
+command -v curl      >/dev/null || apt_install curl
+command -v gpg       >/dev/null || apt_install gnupg
 
 if ! command -v docker >/dev/null; then
     warn "Docker absent, installation depuis le depot officiel"
@@ -129,7 +131,7 @@ if ! command -v docker >/dev/null; then
     ok "Docker installe"
 fi
 docker compose version >/dev/null 2>&1 || apt_install docker-compose-plugin
-ok "Prerequis systeme presents : git, smbclient, openssl, docker (+ plugin compose)"
+ok "Prerequis systeme presents : git, smbclient, openssl, curl, gnupg, docker (+ plugin compose)"
 
 # --- 1. Transfert SMB avec retries ------------------------------------------------
 if [ -n "${SMB_PASSWORD:-}" ]; then
