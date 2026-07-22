@@ -4,6 +4,9 @@
 # Phase 5 : bascule vaultwarden/server:1.36.0 -> timshel/oidcwarden (SSO OIDC
 # Authentik + Trusted Device Encryption). Voir deploy/docs/02_risk_analysis_tde.md
 # pour l'analyse de risque TDE et la procédure break-glass AVANT SSO_ONLY=true.
+# Hôte Docker NON joint au domaine AD : aucune résolution DNS automatique vers
+# la zone vaultwardensso.local. D'où l'alias réseau ci-dessous (résolution
+# interne, sans dépendance DNS) et l'extra_hosts obligatoire vers Authentik.
 # Architecture réseau :
 #   - frontend         : Caddy <-> extérieur (443/80)
 #   - backend           : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy
@@ -49,8 +52,8 @@ services:
     read_only: true                  # rootfs immuable ...
     tmpfs:
       - /tmp                         # ... /data (volume) reste le seul point d'écriture
-    # extra_hosts:                   # a decommenter UNIQUEMENT si le resolveur Docker ne resout pas
-    #   - "auth.vaultwardensso.local:<AUTHENTIK_IP>"   # auth.* via le DNS AD (lecon retrospective legacy, piege #1)
+    extra_hosts:                      # OBLIGATOIRE : hôte non domain-joined, pas de résolution AD DNS automatique
+      - "auth.vaultwardensso.local:${VW_AUTHENTIK_IP}"   # renseigner VW_AUTHENTIK_IP dans .env avant le premier up
     deploy:
       resources:
         limits:                      # anti-DoS : borne l'impact d'une saturation
@@ -77,8 +80,10 @@ services:
       - caddy-config:/config
       - ./caddy/logs:/var/log/caddy
     networks:
-      - frontend
-      - backend
+      frontend: {}
+      backend:
+        aliases:
+          - vault.vaultwardensso.local   # resolution interne sans dependance DNS (hote non domain-joined)
     security_opt:
       - "no-new-privileges:true"
     cap_drop:

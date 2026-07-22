@@ -5,13 +5,18 @@
 > **Ce que ce dépôt ne peut pas faire à votre place** : aucune commande de ce runbook n'a été exécutée contre votre infrastructure réelle (DC `192.168.100.76`, hôte Docker `192.168.100.89`, Authentik). Tout ce qui suit est à exécuter et valider par vous.
 >
 > **Convention** : `DC>` = à taper sur le DC (PowerShell 5.1 élevé) ; `DEBIAN>` = à taper sur l'hôte Docker (bash) ; `POSTE-TEST>` = à taper sur le poste client de test (PowerShell ou invite de commandes).
+>
+> **L'hôte Docker (`192.168.100.89`) n'est PAS joint au domaine AD.** Conséquences traitées dans ce runbook :
+> - Aucune résolution DNS automatique vers `vaultwardensso.local` : les FQDN nécessaires sont soit résolus en interne par Docker (alias réseau `caddy`↔`vault.vaultwardensso.local`), soit forcés en statique (`/etc/hosts` local, `extra_hosts` dans `docker-compose.yml`) — jamais par un changement du résolveur DNS système (évite la fuite OPSEC de noms internes vers un résolveur public, cf. `legacy/docs/00_RETROSPECTIVE_embuches.md` piège #1).
+> - `smbclient` fonctionne sans domain join (authentification NTLM explicite) mais le nom de compte est qualifié par son domaine (`'VAULTWARDENSSO\Administrator'`) pour éviter toute ambiguïté de royaume.
+> - Tout ce qui est SPNEGO/Negotiate (Phase 3, Phase 4) se teste **uniquement depuis un `POSTE-TEST` domain-joined** — jamais depuis le serveur Debian, qui n'a et n'aura pas de TGT Kerberos.
 
 ## Placeholders à substituer avant de commencer
 
 | Placeholder | Où | Valeur réelle attendue |
 |---|---|---|
 | `<CLIENT_SUBNET>` | `deploy/authentik/kerberos-sso-blueprint.yaml` | CIDR du LAN intranet (ex. `192.168.100.0/24`) |
-| `<AUTHENTIK_IP>` | `deploy/firewall/vw-egress-fw.sh` | IP réelle d'`auth.vaultwardensso.local` |
+| `<AUTHENTIK_IP>` / `VW_AUTHENTIK_IP` | `deploy/firewall/vw-egress-fw.sh` **et** `.env` (`VW_AUTHENTIK_IP`) | IP réelle d'`auth.vaultwardensso.local` — même valeur aux deux endroits, hôte non domain-joined donc pas de résolution DNS AD automatique |
 | `<slug>` | `.env` (`VW_SSO_AUTHORITY`), doc Authentik | slug du Provider OIDC Vaultwarden créé côté Authentik |
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
@@ -61,7 +66,7 @@ DEBIAN> sudo systemctl enable --now docker
 **Option A — le certificat a déjà été émis/assemblé ailleurs** (sur le DC ou un poste d'admin Windows, non affecté par le reset du serveur Vaultwarden) :
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'get vault.crt; get vault.key; get adcs-root.crt'
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault.crt; get vault.key; get adcs-root.crt'
 ```
 
 **Option B — le certificat n'existe plus nulle part : réémission complète depuis zéro** (à exécuter sur le DC, seul endroit disposant nativement de l'outillage PKI Windows) :
@@ -108,7 +113,7 @@ DC> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Obje
 Transférer puis convertir côté Debian (mot de passe PFX transmis hors bande, jamais dans ce runbook) :
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'get vault.pfx; get adcs-root.cer'
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault.pfx; get adcs-root.cer'
 DEBIAN> openssl pkcs12 -in vault.pfx -nocerts -nodes -out vault.key
 DEBIAN> openssl pkcs12 -in vault.pfx -clcerts -nokeys -out vault.crt
 DEBIAN> openssl x509 -inform der -in adcs-root.cer -out adcs-root.crt
@@ -150,7 +155,15 @@ DEBIAN> mkdir -p vw-data caddy/logs   # bind mounts attendus par docker-compose.
 DEBIAN> docker compose up -d caddy
 ```
 
-### 1.5 Gate
+### 1.5 Résolution locale pour les gates (hôte non domain-joined)
+
+Le shell Debian n'a pas de DNS lui donnant `vault.vaultwardensso.local` (le host n'est pas membre du domaine). Sans entrée statique, `openssl s_client -connect vault.vaultwardensso.local:443` échoue à résoudre alors même que Caddy écoute bien sur cette machine :
+
+```bash
+DEBIAN> echo "127.0.0.1 vault.vaultwardensso.local" | sudo tee -a /etc/hosts
+```
+
+### 1.6 Gate
 
 ```bash
 DEBIAN> openssl s_client -connect vault.vaultwardensso.local:443 -servername vault.vaultwardensso.local </dev/null 2>/dev/null | openssl x509 -noout -issuer
@@ -160,7 +173,9 @@ DEBIAN> openssl s_client -connect vault.vaultwardensso.local:443 -servername vau
 # attendu : Verify return code: 0 (ok)
 ```
 
-### 1.6 Dette immédiate à solder (confiance TLS du conteneur)
+### 1.7 Dette immédiate à solder (confiance TLS du conteneur)
+
+Le conteneur `vaultwarden` résout `vault.vaultwardensso.local` en interne via l'alias réseau Docker posé sur `caddy` (`deploy/docker/docker-compose.yml`, réseau `backend`) — **pas** besoin de DNS ni de `/etc/hosts` côté conteneur, ça fonctionne même hôte non domain-joined :
 
 ```bash
 DEBIAN> docker compose up -d --build vaultwarden
@@ -202,7 +217,7 @@ Gate réel : `klist` côté DC n'est **pas** suffisant — la validation réelle
 ### 2.4 Transfert du keytab (DEBIAN)
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'get authentik.keytab'
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get authentik.keytab'
 DEBIAN> sha256sum authentik.keytab
 # comparer avec le hash affiché par le script côté DC (Get-FileHash) -> DOIT être identique
 DEBIAN> sudo chown root:root authentik.keytab
@@ -212,7 +227,7 @@ DEBIAN> sudo chmod 600 authentik.keytab
 Puis supprimer le fichier source du DC une fois l'intégrité confirmée :
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U Administrator -c 'del authentik.keytab'
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'del authentik.keytab'
 ```
 
 ---
@@ -324,7 +339,9 @@ DEBIAN> sqlite3 /tmp/restore-test/vw-data/db.sqlite3 "PRAGMA integrity_check;"
 DEBIAN> rm -rf /tmp/restore-test
 ```
 
-### 5.2 Firewall egress (renseigner AUTHENTIK_IP avant)
+### 5.2 Firewall egress + résolution Authentik (hôte non domain-joined : IP statique requise aux deux endroits)
+
+`<AUTHENTIK_IP_REELLE>` doit être la **même valeur** dans `vw-egress-fw.sh` (règle iptables) et dans `.env` (`VW_AUTHENTIK_IP`, utilisé par `extra_hosts` dans `docker-compose.yml`) :
 
 ```bash
 DEBIAN> sed -i 's/__AUTHENTIK_IP__/<AUTHENTIK_IP_REELLE>/' deploy/firewall/vw-egress-fw.sh
@@ -340,9 +357,11 @@ DEBIAN> sudo iptables -L DOCKER-USER -n -v --line-numbers   # gate visuel
 
 ```bash
 DEBIAN> nano deploy/docker/.env
-# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY
+# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY, VW_AUTHENTIK_IP
 # (VW_SSO_AUTHORITY = coller VERBATIM l'issuer depuis
 #  https://auth.vaultwardensso.local/application/o/<slug>/.well-known/openid-configuration)
+# (VW_AUTHENTIK_IP = meme IP que <AUTHENTIK_IP_REELLE> ci-dessus - hote non domain-joined,
+#  pas de DNS AD automatique pour resoudre auth.vaultwardensso.local depuis le conteneur)
 ```
 
 ### 5.4 Build et déploiement
