@@ -34,13 +34,17 @@
 # depot n'est pas deja cloné) :
 #   REPO_URL, REPO_DIR (def. vaultwarden-stack-SSO), REPO_BRANCH
 #   DC_IP, DC_USER, SMB_PASSWORD, SMB_RETRIES
-#   SPN_HOSTNAME, ROOT_THUMBPRINT
+#   SPN_HOSTNAME, AUTH_HOSTNAME, ROOT_THUMBPRINT
+# Tout passe par Caddy : ce script n'a plus besoin de connaitre l'IP reelle
+# d'Authentik (pas d'extra_hosts a renseigner) -- seul AUTHENTIK_UPSTREAM dans
+# .env (docker-compose.yml) en a besoin, a configurer avant la Phase 5.
 # =============================================================================
 set -euo pipefail
 
 DC_IP="${DC_IP:-192.168.100.76}"
 DC_USER="${DC_USER:-VAULTWARDENSSO\\Administrator}"
 SPN_HOSTNAME="${SPN_HOSTNAME:-vault.vaultwardensso.local}"
+AUTH_HOSTNAME="${AUTH_HOSTNAME:-auth.vaultwardensso.local}"
 ROOT_THUMBPRINT="${ROOT_THUMBPRINT:-473BAAC9189D52715E3E73CED9BEC691293BED10}"
 SMB_RETRIES="${SMB_RETRIES:-3}"
 REPO_URL="${REPO_URL:-}"
@@ -117,7 +121,7 @@ if [ -z "${_VAULT_CERT_REEXEC:-}" ] && [ -f "$CANONICAL" ] \
         && [ "$(readlink -f "$0" 2>/dev/null || echo "$0")" != "$(readlink -f "$CANONICAL")" ]; then
     info "Relais vers la copie du depot : $CANONICAL"
     exec env _VAULT_CERT_REEXEC=1 REPO_URL="$REPO_URL" REPO_DIR="$REPO_DIR" REPO_BRANCH="$REPO_BRANCH" \
-        DC_IP="$DC_IP" DC_USER="$DC_USER" SPN_HOSTNAME="$SPN_HOSTNAME" \
+        DC_IP="$DC_IP" DC_USER="$DC_USER" SPN_HOSTNAME="$SPN_HOSTNAME" AUTH_HOSTNAME="$AUTH_HOSTNAME" \
         ROOT_THUMBPRINT="$ROOT_THUMBPRINT" SMB_RETRIES="$SMB_RETRIES" \
         bash "$CANONICAL" "$@"
 fi
@@ -178,10 +182,10 @@ ok "4 fichiers transferes"
 # --- 2. Conversion certificat serveur (Base64/PEM -- certreq -submit sans -binary) --
 openssl x509 -in vault-new.cer -out vault-new.pem \
     || fail "Conversion vault-new.cer -> PEM echouee"
-if ! openssl x509 -in vault-new.pem -noout -ext subjectAltName | grep -q "$SPN_HOSTNAME"; then
-    fail "SAN du certificat ne contient pas $SPN_HOSTNAME -- mauvais certificat, ne pas continuer."
-fi
-ok "SAN verifie : $SPN_HOSTNAME present"
+SAN="$(openssl x509 -in vault-new.pem -noout -ext subjectAltName)"
+echo "$SAN" | grep -q "$SPN_HOSTNAME" || fail "SAN du certificat ne contient pas $SPN_HOSTNAME -- mauvais certificat, ne pas continuer."
+echo "$SAN" | grep -q "$AUTH_HOSTNAME" || fail "SAN du certificat ne contient pas $AUTH_HOSTNAME -- Caddy ne pourra pas servir auth.* avec ce certificat (regenerer avec New-VaultCertDC.ps1 -AuthHostname)."
+ok "SAN verifie : $SPN_HOSTNAME et $AUTH_HOSTNAME presents"
 
 # --- 3. Conversion racine AD CS (DER brut -- Export-Certificate -Type CERT) ---------
 openssl x509 -inform der -in adcs-root.cer -out adcs-root.pem \
@@ -231,19 +235,12 @@ else
     warn ".env deja present, non modifie (idempotent) -- verifier VW_ADMIN_TOKEN manuellement si besoin"
 fi
 
-# VW_AUTHENTIK_IP alimente extra_hosts dans docker-compose.yml, qui exige une IP
-# syntaxiquement valide -- le placeholder "CHANGE_ME_IP" fait echouer docker
-# compose up en entier (meme pour un simple test Phase 1 sans Authentik encore
-# configure). Repli sur 192.0.2.1 (TEST-NET-1, RFC 5737 : reservee par l'IANA
-# pour la documentation/les exemples, jamais routable, jamais attribuee a un
-# vrai serveur -- delibinerement PAS 127.0.0.1, qui "marcherait" silencieusement
-# sans jamais joindre le vrai Authentik et masquerait que ce n'est pas configure)
-# -- a corriger avec la vraie IP avant la Phase 5, sinon SSO reste inoperant
-# pour TOUS les utilisateurs (le conteneur ne peut pas resoudre auth.vaultwardensso.local).
-if grep -q '^VW_AUTHENTIK_IP=CHANGE_ME_IP' .env 2>/dev/null; then
-    sed -i 's#^VW_AUTHENTIK_IP=CHANGE_ME_IP#VW_AUTHENTIK_IP=192.0.2.1#' .env
-    warn "VW_AUTHENTIK_IP etait CHANGE_ME_IP (invalide pour Docker) -- repli sur 192.0.2.1 (placeholder RFC 5737, non fonctionnel par construction)"
-    warn "SSO NE FONCTIONNERA POUR AUCUN UTILISATEUR tant que VW_AUTHENTIK_IP n'est pas mis a la vraie IP d'Authentik dans .env (puis: docker compose up -d vaultwarden)"
+# AUTHENTIK_UPSTREAM (Caddy, pas Vaultwarden -- tout passe par Caddy) : pas
+# besoin d'une IP valide ici pour que Phase 1 demarre, le Caddyfile a son propre
+# repli RFC 5737. Juste un rappel si ce n'est toujours pas configure.
+if ! grep -q '^AUTHENTIK_UPSTREAM=.\+' .env 2>/dev/null; then
+    warn "AUTHENTIK_UPSTREAM non renseigne dans .env -- Caddy demarrera quand meme, mais auth.vaultwardensso.local"
+    warn "  ne fonctionnera pour AUCUN utilisateur tant que ce n'est pas mis a la vraie URL d'Authentik (Phase 5)."
 fi
 
 mkdir -p vw-data caddy/logs

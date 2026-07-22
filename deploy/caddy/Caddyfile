@@ -1,11 +1,19 @@
 # =============================================================================
-# Caddyfile — reverse proxy TLS pour Vaultwarden
+# Caddyfile — reverse proxy TLS pour Vaultwarden ET Authentik (tout passe par Caddy)
 # -----------------------------------------------------------------------------
 # Certificat serveur emis par l'AC interne (AD CS Enterprise Root,
 # thumbprint 473BAAC9189D52715E3E73CED9BEC691293BED10). Chaine complete
 # (leaf + intermediaires eventuels) dans vault.crt, cle privee dans vault.key.
+# Le certificat DOIT porter un SAN pour vault.vaultwardensso.local ET
+# auth.vaultwardensso.local (les deux vhosts ci-dessous partagent le meme
+# fichier) -- genere par deploy/tls/New-VaultCertDC.ps1 -AuthHostname.
 # Jamais "tls internal" en cible : la chaine doit remonter jusqu'a l'AC
 # interne pour etre approuvee par les postes du domaine (GPO trust store).
+# -----------------------------------------------------------------------------
+# auth.vaultwardensso.local est un reverse proxy pur vers le vrai serveur
+# Authentik (AUTHENTIK_UPSTREAM, cf. docker-compose.yml) : Caddy ne comprend
+# pas SPNEGO/Kerberos, il transmet tel quel l'en-tete Negotiate/Authorization,
+# la validation du ticket se fait cote Authentik avec son propre keytab.
 # =============================================================================
 {
     # Point d'admin Caddy désactivé (réduction de surface)
@@ -44,4 +52,24 @@ vault.vaultwardensso.local {
     # }
 
     reverse_proxy vaultwarden:80
+}
+
+auth.vaultwardensso.local {
+    tls /etc/caddy/certs/vault.crt /etc/caddy/certs/vault.key
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "same-origin"
+        -Server
+    }
+
+    # AUTHENTIK_UPSTREAM (docker-compose.yml) : URL complete du vrai serveur
+    # Authentik, ex. https://192.168.100.50 ou http://192.168.100.50:9000.
+    # Repli RFC 5737 (TEST-NET-1, jamais routable) si non renseigne : Caddy
+    # demarre normalement, ce vhost renvoie une erreur de proxy (502/504) tant
+    # que la vraie valeur n'est pas configuree, plutot que d'empecher tout le
+    # stack de demarrer.
+    reverse_proxy {$AUTHENTIK_UPSTREAM:https://192.0.2.1}
 }

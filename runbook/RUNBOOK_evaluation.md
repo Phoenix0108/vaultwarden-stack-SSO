@@ -6,7 +6,7 @@
 >
 > **Légende des pastilles** : 🔵 = à exécuter sur le **DC** (PowerShell 5.1 élevé, `192.168.100.76`) · 🟢 = à exécuter sur l'**hôte Docker** (bash, `192.168.100.89`) · 🟠 = à exécuter sur un **poste client de test** domain-joined (PowerShell ou invite de commandes). Une étape sans pastille est une lecture/vérification, pas une commande à taper.
 >
-> **L'hôte Docker (`192.168.100.89`) n'est PAS joint au domaine AD.** Conséquences : aucune résolution DNS automatique vers `vaultwardensso.local` (résolue en interne par Docker pour `vault.*`, forcée en statique pour `auth.*` via `extra_hosts` — jamais par un changement du résolveur DNS système, cf. fuite OPSEC piège #1 de `legacy/docs/00_RETROSPECTIVE_embuches.md`) ; `smbclient` fonctionne sans domain join mais le compte est qualifié par son domaine (`'VAULTWARDENSSO\Administrator'`) ; tout ce qui est SPNEGO/Negotiate (Phase 3, Phase 4) se teste **uniquement depuis un poste 🟠 domain-joined**, jamais depuis le serveur Debian.
+> **L'hôte Docker (`192.168.100.89`) n'est PAS joint au domaine AD.** Conséquences : aucune résolution DNS automatique vers `vaultwardensso.local`. **Tout passe par Caddy** : `vault.*` ET `auth.*` sont résolus en interne par Docker vers le conteneur Caddy (alias réseau sur `backend`, pas de dépendance DNS) — Vaultwarden n'a jamais besoin de connaître l'IP réelle d'Authentik, seul Caddy la connaît (`AUTHENTIK_UPSTREAM`) pour reverse-proxier vers le vrai serveur. `smbclient` fonctionne sans domain join mais le compte est qualifié par son domaine (`'VAULTWARDENSSO\Administrator'`) ; tout ce qui est SPNEGO/Negotiate (Phase 3, Phase 4) se teste **uniquement depuis un poste 🟠 domain-joined**, jamais depuis le serveur Debian.
 
 ## Placeholders à substituer avant de commencer
 
@@ -14,7 +14,8 @@
 |---|---|---|
 | `<URL_DU_DEPOT_GIT>` | Phase 1, bloc DEBIAN #1 | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
 | `<CLIENT_SUBNET>` | `deploy/authentik/kerberos-sso-blueprint.yaml` | CIDR du LAN intranet (ex. `192.168.100.0/24`) |
-| `<AUTHENTIK_IP_REELLE>` / `VW_AUTHENTIK_IP` | `deploy/firewall/vw-egress-fw.sh` **et** `.env` (`VW_AUTHENTIK_IP`) | IP réelle d'`auth.vaultwardensso.local` — même valeur aux deux endroits |
+| `<AUTHENTIK_IP_REELLE>` | `deploy/firewall/vw-egress-fw.sh` | IP réelle d'`auth.vaultwardensso.local`, utilisée par la règle firewall de l'egress de **Caddy** (pas Vaultwarden) |
+| `AUTHENTIK_UPSTREAM` | `.env` (Phase 5) | URL complète du vrai serveur Authentik (ex. `https://192.168.100.50`) — seul Caddy en a besoin, pour reverse-proxier `auth.vaultwardensso.local` |
 | `<slug>` | `.env` (`VW_SSO_AUTHORITY`), doc Authentik | slug du Provider OIDC Vaultwarden créé côté Authentik |
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
@@ -53,7 +54,7 @@
 
 ### 🔵 DC — bloc 1 : générer la CSR, l'accepter, exporter clé + racine
 
-Tout dans **la même session PowerShell élevée, sans interruption** (un écart de session entre `-new` et `-accept` rend le certificat orphelin — vécu en pratique).
+Tout dans **la même session PowerShell élevée, sans interruption** (un écart de session entre `-new` et `-accept` rend le certificat orphelin — vécu en pratique). Le certificat porte deux SAN (`vault.*` et `auth.*`) : **tout passe par Caddy**, y compris `auth.vaultwardensso.local` (Caddy reverse-proxie vers le vrai Authentik) — un seul certificat suffit pour les deux vhosts.
 
 ```powershell
 @"
@@ -78,6 +79,7 @@ OID=1.3.6.1.5.5.7.3.1
 [Extensions]
 2.5.29.17 = "{text}"
 _continue_ = "dns=vault.vaultwardensso.local&"
+_continue_ = "dns=auth.vaultwardensso.local&"
 "@ | Out-File -Encoding ascii vault-new.inf
 
 certreq -new -machine vault-new.inf vault-new.csr
@@ -134,7 +136,7 @@ smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault-ne
 # certreq -submit sans -binary sort le certificat en Base64 (PEM), pas en DER -> pas d'-inform der ici
 openssl x509 -in vault-new.cer -out vault-new.pem
 openssl x509 -in vault-new.pem -noout -subject -ext subjectAltName
-# attendu : vault.vaultwardensso.local present dans le SAN -- STOP si absent, mauvais certificat
+# attendu : vault.vaultwardensso.local ET auth.vaultwardensso.local presents dans le SAN -- STOP si l'un des deux manque
 
 # Export-Certificate -Type CERT sort en DER brut (different de certreq -submit) -> -inform der ici
 openssl x509 -inform der -in adcs-root.cer -out adcs-root.pem
@@ -327,9 +329,11 @@ sudo systemctl enable --now vw-egress-fw.service
 sudo iptables -L DOCKER-USER -n -v --line-numbers   # gate visuel
 
 nano deploy/docker/.env
-# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY, VW_AUTHENTIK_IP
+# renseigner VW_SSO_CLIENT_ID, VW_SSO_CLIENT_SECRET, VW_SSO_AUTHORITY, AUTHENTIK_UPSTREAM
 # (VW_SSO_AUTHORITY = coller VERBATIM l'issuer depuis .../application/o/<slug>/.well-known/openid-configuration)
-# (VW_AUTHENTIK_IP = meme IP que <AUTHENTIK_IP_REELLE> ci-dessus)
+# (AUTHENTIK_UPSTREAM = URL complete, ex. https://<AUTHENTIK_IP_REELLE> -- utilisee par Caddy uniquement,
+#  Vaultwarden n'en a pas besoin puisque tout passe par Caddy)
+docker compose up -d caddy   # recharge Caddy avec AUTHENTIK_UPSTREAM
 ```
 
 ### 🟢 DEBIAN — bloc 2 : build et déploiement
