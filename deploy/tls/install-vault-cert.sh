@@ -243,7 +243,7 @@ if ! grep -q '^AUTHENTIK_UPSTREAM=.\+' .env 2>/dev/null; then
     warn "  ne fonctionnera pour AUCUN utilisateur tant que ce n'est pas mis a la vraie URL d'Authentik (Phase 5)."
 fi
 
-mkdir -p vw-data caddy/logs
+mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (deploy/caddy/ est un sibling)
 
 # --- 7. Resolution locale (hote non domain-joined, idempotent) ---------------------
 if ! grep -q "$SPN_HOSTNAME" /etc/hosts; then

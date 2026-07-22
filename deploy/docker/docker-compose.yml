@@ -83,11 +83,11 @@ services:
       - "443:443/udp"                # HTTP/3
       - "80:80"                      # redirect HTTP -> HTTPS
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/etc/caddy/certs:ro   # vault.crt (SAN vault.* + auth.*) + vault.key (600, root) — AC interne AD CS
+      - ../caddy/Caddyfile:/etc/caddy/Caddyfile:ro   # deploy/caddy/ est un sibling de deploy/docker/, pas un enfant -- ../ obligatoire
+      - ../caddy/certs:/etc/caddy/certs:ro   # vault.crt (SAN vault.* + auth.*) + vault.key (600, root) — AC interne AD CS
       - caddy-data:/data
       - caddy-config:/config
-      - ./caddy/logs:/var/log/caddy
+      - ../caddy/logs:/var/log/caddy
     networks:
       frontend: {}
       backend:
