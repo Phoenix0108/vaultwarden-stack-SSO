@@ -52,9 +52,23 @@ ok(){   echo -e "\033[32m[ OK ]\033[0m $*"; }
 warn(){ echo -e "\033[33m[WARN]\033[0m $*"; }
 fail(){ echo -e "\033[31m[FAIL]\033[0m $*" >&2; exit 1; }
 
+apt_prepare() {
+    [ -n "${_APT_PREPARED:-}" ] && return 0
+    # Installeur Debian (DVD/ISO) laisse souvent une source cdrom:// dans
+    # sources.list ; sans le disque monte, apt-get update echoue dessus et
+    # (avec set -e) tue le script meme si les depots reseau fonctionnent.
+    if grep -q '^deb cdrom:' /etc/apt/sources.list 2>/dev/null; then
+        warn "Source cdrom:// detectee dans sources.list, desactivee (Release introuvable sans le disque monte)"
+        sudo sed -i '/^deb cdrom:/s/^/#/' /etc/apt/sources.list
+    fi
+    sudo apt-get update -qq \
+        || warn "apt-get update a signale une erreur sur au moins une source -- poursuite, le pass/fail reel se joue sur apt-get install"
+    _APT_PREPARED=1
+}
+
 apt_install() {
     warn "$* absent, installation via apt-get"
-    sudo apt-get update -qq
+    apt_prepare
     sudo apt-get install -y "$@"
 }
 
@@ -103,10 +117,13 @@ command -v openssl   >/dev/null || apt_install openssl
 
 if ! command -v docker >/dev/null; then
     warn "Docker absent, installation depuis le depot officiel"
+    apt_prepare
     curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-    sudo apt-get update -qq
+    # Nouvelle source ajoutee (docker.list) : reindexation necessaire malgre apt_prepare deja passe
+    sudo apt-get update -qq \
+        || warn "apt-get update a signale une erreur sur au moins une source -- poursuite, le pass/fail reel se joue sur apt-get install"
     sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
     sudo systemctl enable --now docker
     ok "Docker installe"
