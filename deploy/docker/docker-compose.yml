@@ -35,7 +35,7 @@ services:
       ADMIN_TOKEN: "${VW_ADMIN_TOKEN}"          # depuis .env
       # --- SSO OIDC (Authentik, via Caddy) — noms de variables vérifiés contre SSO.md du fork au moment de la rédaction ---
       SSO_ENABLED: "true"
-      SSO_ONLY: "false"                         # NE PASSER A "true" QU'APRES validation du break-glass (gate Phase 5.7)
+      SSO_ONLY: "${VW_SSO_ONLY:-false}"          # NE PASSER A "true" (via .env) QU'APRES avoir verifie que SSO_CLIENT_ID/SECRET/AUTHORITY sont reels (pas CHANGE_ME) ET qu'un login SSO complet fonctionne deja avec ce flag a false -- sinon plus aucune facon de se logger tant que .env n'est pas repasse a false + docker compose up -d
       SSO_CLIENT_ID: "${VW_SSO_CLIENT_ID}"
       SSO_CLIENT_SECRET: "${VW_SSO_CLIENT_SECRET}"   # pas de variante _FILE dans ce fork : rester sur env var via .env
       SSO_AUTHORITY: "${VW_SSO_AUTHORITY}"      # coller VERBATIM depuis /application/o/<slug>/.well-known/openid-configuration (issuer, casse exacte)
