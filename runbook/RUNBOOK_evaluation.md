@@ -301,6 +301,8 @@ Pour un déploiement fleet (pas juste le poste de test), convertir la copie Fire
 
 🖱️ DevTools navigateur → en-tête `Authorization: Negotiate` sur la requête vers `auth.vaultwardensso.local`. 🖱️ Firefox : `about:policies` → `NegotiateAuth.Trusted` doit lister l'URL Authentik.
 
+🖱️ Signet géré (Chrome `chrome://policy` / Edge `edge://policy` → `ManagedBookmarks`/`ManagedFavorites`, Firefox `about:policies` → `Bookmarks`) : cliquer le signet "Vaultwarden (SSO)" → aucun écran email/identifiant affiché, redirection SPNEGO immédiate vers `https://vault.vaultwardensso.local/#/sso?identifier=vaultwardensso`. Ce lien fonctionne indépendamment de `SSO_ONLY` (c'est un raccourci client, pas une restriction serveur) — testable dès maintenant en le collant manuellement dans la barre d'adresse, sans attendre le déploiement GPO fleet.
+
 ---
 
 ## Phase 5 — Bascule OIDCWarden + TDE

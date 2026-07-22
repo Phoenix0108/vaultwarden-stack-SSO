@@ -17,6 +17,16 @@
     pre-provisionnant le serveur self-host (evite la saisie manuelle du
     baseURL au premier lancement de l'extension). Source verifiee :
     bitwarden.com/help (registre "environment" sous 3rdparty\extensions).
+  - Signet gere Chrome (ManagedBookmarks) / Edge (ManagedFavorites) pointant
+    vers $VaultBaseUrl/#/sso?identifier=... : ce lien declenche l'auto-submit
+    cote client (sso.component.ts, bitwarden/clients) et court-circuite les
+    ecrans email + identifiant SSO du web-vault -- poste du domaine = SPNEGO
+    immediat au clic, aucune saisie. Le serveur OIDCWarden/Vaultwarden est
+    mono-instance/mono-IdP : /connect/authorize ne valide aucun identifiant
+    d'organisation, la valeur du parametre "identifier" est donc arbitraire.
+    Le formulaire email/mot de passe classique reste intact et accessible
+    (poste hors domaine, break-glass) -- ce signet est un raccourci, pas une
+    restriction serveur (SSO_ONLY reste sous le controle du gate Phase 5.7).
  NE couvre PAS (limitations documentees, actions manuelles requises) :
   - Firefox network.negotiate-auth.trusted-uris : le schema de registre exact
     de l'ADMX Mozilla n'est pas assez stable/documente pour etre pousse en
@@ -41,8 +51,21 @@ param(
     [string] $AuthHostname = 'auth.vaultwardensso.local',
     [string] $VaultBaseUrl = 'https://vault.vaultwardensso.local',
     [string] $BitwardenChromeExtId = 'nngceckbapebfimnlniiiahkandclblb',   # meme ID Chrome et Edge (store Chromium)
-    [string] $BitwardenFirefoxExtId = '{446900e4-71c2-419f-a6a7-df9c091e268b}'
+    [string] $BitwardenFirefoxExtId = '{446900e4-71c2-419f-a6a7-df9c091e268b}',
+    # Valeur libre : le serveur (OIDCWarden/Vaultwarden) est mono-instance/mono-IdP,
+    # /connect/authorize ne valide aucun identifiant d'organisation cote serveur.
+    # Cette valeur ne sert qu'a satisfaire la validation du formulaire Angular du
+    # web-vault avant l'auto-submit (cf. sso.component.ts, bitwarden/clients).
+    [string] $SsoIdentifier = 'vaultwardensso'
 )
+# Lien direct qui court-circuite l'ecran email + l'ecran "identifiant d'organisation"
+# du web-vault : sso.component.ts declenche un submit() automatique des le ngOnInit
+# quand le query param "identifier" est present (comportement documente comme
+# "IdP-initiated SSO" par Bitwarden). Poste du domaine => Kerberos SPNEGO prend le
+# relais sans aucune saisie. Le formulaire email/mot de passe classique reste
+# accessible normalement (poste hors domaine, break-glass) : ce lien n'est qu'un
+# raccourci, il ne desactive rien cote serveur.
+$SsoDeepLink = "$VaultBaseUrl/#/sso?identifier=$SsoIdentifier"
 $ErrorActionPreference = 'Stop'
 function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[ OK ] $m" -ForegroundColor Green }
@@ -101,6 +124,20 @@ $ffExtKey = "HKLM\SOFTWARE\Policies\Mozilla\Firefox\3rdparty\Extensions\$Bitward
 Set-GPRegistryValue -Name $GpoName -Key $ffExtKey -ValueName 'environment' -Type String -Value $envJson | Out-Null
 Ok "Cles 3rdparty appliquees (Chrome, Edge, Firefox)"
 
+# --- 5. Signet navigateur : acces direct au flow SSO (sans email/identifiant) --
+# N'ecrase pas les signets existants de l'utilisateur : ManagedBookmarks/ManagedFavorites
+# ajoute un dossier gere en plus, il ne remplace pas la barre de signets locale.
+Info "Signet gere -> $SsoDeepLink (court-circuite l'ecran email + identifiant SSO)"
+$bookmarksJson = (@(
+    @{ toplevel_name = 'Vaultwarden' },
+    @{ name = 'Vaultwarden (SSO)'; url = $SsoDeepLink }
+) | ConvertTo-Json -Compress)
+
+Set-GPRegistryValue -Name $GpoName -Key 'HKLM\SOFTWARE\Policies\Google\Chrome' -ValueName 'ManagedBookmarks' -Type String -Value $bookmarksJson | Out-Null
+Set-GPRegistryValue -Name $GpoName -Key 'HKLM\SOFTWARE\Policies\Microsoft\Edge' -ValueName 'ManagedFavorites' -Type String -Value $bookmarksJson | Out-Null
+Ok "Signet gere applique (Chrome: ManagedBookmarks, Edge: ManagedFavorites)"
+Warn "Firefox : signet equivalent a ajouter via la policy 'Bookmarks' de deploy/gpo/firefox-policies.json."
+
 Write-Host ""
 Ok "GPO '$GpoName' configuree et liee. gpupdate /force sur un poste test avant validation."
 Warn "Firefox network.negotiate-auth.trusted-uris NON automatise ici : deployer"
@@ -108,3 +145,4 @@ Warn "  deploy/gpo/firefox-policies.json vers %ProgramFiles%\Mozilla Firefox\dis
 Warn "  (GPO Files preference ou script de connexion) puis verifier about:policies sur un poste test."
 Warn "Desktop Bitwarden (Electron) : pas de pre-provisioning baseURL automatise, saisie manuelle unique."
 Warn "GATE : gpresult /r sur un poste test + DevTools -> en-tete 'Authorization: Negotiate' sur la requete vers $AuthHostname."
+Warn "GATE signet : ouvrir $SsoDeepLink sur un poste test -> aucun ecran email/identifiant, redirection SPNEGO immediate."
