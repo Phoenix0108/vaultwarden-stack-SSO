@@ -29,10 +29,11 @@ deploy/
 │   ├── New-VaultCertDC.ps1           # génère + exporte le certificat vault.*/auth.* + la racine AD CS (Phase 1, DC)
 │   └── install-vault-cert.sh         # transfert, conversion, installation, déploiement + gates (Phase 1, Debian)
 ├── kerberos/
-│   └── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
+│   ├── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
+│   └── Setup-LDAPBind-DC.ps1         # compte de bind LDAP + OU cible (Phase 2bis, provisioning, à exécuter sur le DC)
 ├── authentik/
 │   ├── kerberos-sso-blueprint.yaml   # Source Kerberos + policy de redirection (Phase 3)
-│   └── README.md                     # étapes manuelles (upload keytab) + gates
+│   └── README.md                     # Source LDAP (§0) + étapes manuelles Kerberos (upload keytab) + gates
 └── gpo/
     ├── Deploy-KerberosSSO-GPO.ps1    # GPO navigateurs + pré-provisioning Bitwarden (Phase 4)
     ├── firefox-policies.json         # network.negotiate-auth.trusted-uris
@@ -53,6 +54,7 @@ runbook/
 |---|---|---|---|
 | 1 | TLS Caddy (chaîne AD CS) | `deploy/caddy/Caddyfile`, `deploy/docker/docker-compose.yml`, `docker compose up -d caddy` | `openssl s_client` → issuer AD CS, `Verify return code: 0` ; `docker exec vaultwarden curl -fsS https://vault.../alive` |
 | 2 | Compte de service + SPN + keytab (DC) | `deploy/kerberos/Setup-KerberosSPNEGO-DC.ps1` | Script auto-vérifié (anti-doublon SPN, msDS-SupportedEncryptionTypes=24, kvno, SHA-256 keytab) ; validation réelle en Phase 3 |
+| 2bis | Source LDAP (provisioning des comptes) | `deploy/kerberos/Setup-LDAPBind-DC.ps1` + config manuelle Authentik | Sync LDAP sans erreur, comptes de `OU=Vaultwarden` visibles dans Directory → Users |
 | 3 | Kerberos Source Authentik + flow SPNEGO | `deploy/authentik/kerberos-sso-blueprint.yaml` + `README.md` | Poste domaine → aucun formulaire ; poste hors domaine → fallback password |
 | 4 | GPO postes clients (négociation Kerberos navigateurs) | `deploy/gpo/Deploy-KerberosSSO-GPO.ps1` | `gpresult /r` + header `Authorization: Negotiate` |
 | 5 | Bascule OIDCWarden + TDE | `deploy/docker/*` mis à jour, `docs/02_risk_analysis_tde.md` | Login SSO complet, device approval, master password non redemandé |
