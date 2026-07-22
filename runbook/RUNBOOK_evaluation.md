@@ -21,8 +21,7 @@
 | `TargetOuDn` | paramètre de `Deploy-KerberosSSO-GPO.ps1` | DN de l'OU contenant les postes clients |
 | Version OIDCWarden | `deploy/docker/Dockerfile` | `v2026.6.4-1` épinglée à la rédaction — **revérifier** sur `hub.docker.com/r/timshel/oidcwarden/tags` avant build |
 | `<URL_DU_DEPOT_GIT>` | Phase 1.0a | URL de clone du dépôt (SSH ou HTTPS selon vos accès) |
-| `<CA-CommonName>` | Phase 1.1 Option B (`certreq -submit -config`) | `Get-CATransaction`/`certutil -CAInfo` sur le DC donne `<NomServeur>\<NomCA>` exact |
-| `<mot_de_passe_temporaire_export>` | Phase 1.1 Option B | mot de passe fort, transmis hors bande, à usage unique pour le PFX (jamais dans un fichier versionné) |
+| `<mot_de_passe_temporaire_export>` | Phase 1.1a | mot de passe fort, transmis hors bande, à usage unique pour le PFX `auth-vw.pfx` (jamais dans un fichier versionné) |
 
 ## Checklist globale
 
@@ -61,70 +60,59 @@ DEBIAN> sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-com
 DEBIAN> sudo systemctl enable --now docker
 ```
 
-### 1.1 Obtenir la chaîne TLS (vault.crt + vault.key + adcs-root.crt)
+### 1.1 Obtenir la chaîne TLS (état réel constaté sur `C:\` du DC)
 
-**Option A — le certificat a déjà été émis/assemblé ailleurs** (sur le DC ou un poste d'admin Windows, non affecté par le reset du serveur Vaultwarden) :
+Inventaire du `C:\` du DC à ce stade (cf. capture) :
 
-```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault.crt; get vault.key; get adcs-root.crt'
-```
+| Fichier | Statut |
+|---|---|
+| `adcs-root.cer`, `adcs-root.pem`, `adcs-root.b64` | Racine AD CS déjà exportée **et déjà convertie en PEM** — pas de reconversion DER→PEM nécessaire. |
+| `auth-vw.csr`, `auth-vw.rsp`, `auth-vw.cer`, `auth-vw.pem` | Certificat serveur déjà demandé (`certreq -new`) et émis. **Aucun `.key`/`.pfx` présent** : la clé privée est encore uniquement dans le magasin `Cert:\LocalMachine\My` du DC (comportement normal de `certreq`) — reste à l'exporter. |
+| `authentik.keytab` | Déjà présent — la Phase 2 (§2.1) a déjà tourné ou le fichier a été pré-positionné ; vérifier son intégrité (§2.4) avant de le considérer acquis, ne pas relancer le script Phase 2 dessus. |
+| `adfs_cert.cer`, `adfs_cert.rsp`, `adfs_req.csr`, `adfs_req.inf` | ⚠️ Artefacts de l'ancien projet AD FS (archivé dans `legacy/`) — **ne pas utiliser**, à purger en Phase 6. |
+| `caddy-internal-root.crt` | ⚠️ Résidu d'un test antérieur avec `tls internal` — **ne pas utiliser**, à purger en Phase 6. |
 
-**Option B — le certificat n'existe plus nulle part : réémission complète depuis zéro** (à exécuter sur le DC, seul endroit disposant nativement de l'outillage PKI Windows) :
-
-```powershell
-DC> @"
-[Version]
-Signature="`$Windows NT`$"
-[NewRequest]
-Subject = "CN=vault.vaultwardensso.local"
-KeyLength = 2048
-KeySpec = 1
-Exportable = TRUE
-MachineKeySet = TRUE
-SMIME = FALSE
-PrivateKeyArchive = FALSE
-UserProtected = FALSE
-UseExistingKeySet = FALSE
-ProviderName = "Microsoft RSA SChannel Cryptographic Provider"
-ProviderType = 12
-RequestType = PKCS10
-KeyUsage = 0xa0
-[EnhancedKeyUsageExtension]
-OID=1.3.6.1.5.5.7.3.1
-[Extensions]
-2.5.29.17 = "{text}"
-_continue_ = "dns=vault.vaultwardensso.local&"
-"@ | Out-File -Encoding ascii vault.inf
-
-DC> certreq -new vault.inf vault.csr
-DC> certreq -submit -attrib "CertificateTemplate:WebServer" -config "192.168.100.76\<CA-CommonName>" vault.csr vault.cer
-DC> certreq -accept vault.cer
-```
-
-Exporter la clé privée + le certificat (le compte utilisé doit avoir accès au magasin machine où la clé a été générée) :
+**a. Lier la clé privée au certificat émis et l'exporter (DC)** — idempotent : si le certificat est déjà accepté dans le magasin, `certreq -accept` renvoie une erreur bénigne, ignorable :
 
 ```powershell
+DC> certreq -accept C:\auth-vw.cer
+DC> $thumb = (Get-PfxCertificate -FilePath C:\auth-vw.cer).Thumbprint
+DC> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $thumb }
+DC> if (-not $cert) { throw "Certificat non trouve dans Cert:\LocalMachine\My - cle privee absente, la CSR devra etre regeneree avec Exportable=TRUE" }
 DC> $pfxPass = ConvertTo-SecureString -String "<mot_de_passe_temporaire_export>" -AsPlainText -Force
-DC> $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -eq "CN=vault.vaultwardensso.local" } | Select-Object -First 1
-DC> Export-PfxCertificate -Cert $cert -FilePath C:\vault.pfx -Password $pfxPass
-DC> Export-Certificate -Cert (Get-ChildItem Cert:\LocalMachine\Root | Where-Object { $_.Thumbprint -eq '473BAAC9189D52715E3E73CED9BEC691293BED10' }) -FilePath C:\adcs-root.cer -Type CERT
+DC> Export-PfxCertificate -Cert $cert -FilePath C:\auth-vw.pfx -Password $pfxPass
 ```
 
-Transférer puis convertir côté Debian (mot de passe PFX transmis hors bande, jamais dans ce runbook) :
+Si le `throw` se déclenche : la CSR d'origine n'a probablement pas été générée avec `Exportable = TRUE` — revenir aux commandes `certreq -new`/`-submit` (voir historique de commandes ou régénérer une nouvelle CSR avec `Exportable = TRUE` dans l'INF) plutôt que de contourner.
+
+**b. Transférer (Debian)** :
 
 ```bash
-DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get vault.pfx; get adcs-root.cer'
-DEBIAN> openssl pkcs12 -in vault.pfx -nocerts -nodes -out vault.key
-DEBIAN> openssl pkcs12 -in vault.pfx -clcerts -nokeys -out vault.crt
-DEBIAN> openssl x509 -inform der -in adcs-root.cer -out adcs-root.crt
-DEBIAN> openssl x509 -in adcs-root.crt -noout -fingerprint -sha1
+DEBIAN> smbclient //192.168.100.76/C$ -U 'VAULTWARDENSSO\Administrator' -c 'get auth-vw.pfx; get auth-vw.pem; get adcs-root.pem'
+```
+
+**c. Vérifier ce que couvre réellement le certificat avant de le monter** (le nom de fichier `auth-vw` suggère qu'il s'agit peut-être d'un certificat combiné auth+vault — à confirmer, ne pas supposer) :
+
+```bash
+DEBIAN> openssl x509 -in auth-vw.pem -noout -subject -ext subjectAltName
+# attendu : vault.vaultwardensso.local present dans le SAN (et auth.vaultwardensso.local si certificat combine)
+```
+
+Si `vault.vaultwardensso.local` n'apparaît pas dans le SAN, **STOP** — ce n'est pas le bon certificat pour Caddy, ne pas continuer avec celui-ci.
+
+**d. Convertir et assembler la chaîne (Debian)** :
+
+```bash
+DEBIAN> openssl pkcs12 -in auth-vw.pfx -nocerts -nodes -out vault.key
+DEBIAN> cat auth-vw.pem adcs-root.pem > vault.crt
+DEBIAN> openssl x509 -in adcs-root.pem -noout -fingerprint -sha1
 # attendu : 473BAAC9189D52715E3E73CED9BEC691293BED10 (comparer à la valeur de contexte)
 ```
 
-Puis, côté DC, supprimer les fichiers transitoires (`vault.pfx`, `vault.cer`, `vault.csr`, `vault.inf`, `adcs-root.cer` — la clé privée exportée est un secret) :
+**e. Purger les fichiers transitoires côté DC** (le PFX contient la clé privée = secret) :
 
 ```powershell
-DC> Remove-Item C:\vault.pfx, C:\vault.cer, C:\vault.csr, C:\vault.inf, C:\adcs-root.cer -Force
+DC> Remove-Item C:\auth-vw.pfx -Force
 ```
 
 ### 1.2 Placer les fichiers dans le dépôt (DEBIAN)
@@ -133,8 +121,8 @@ DC> Remove-Item C:\vault.pfx, C:\vault.cer, C:\vault.csr, C:\vault.inf, C:\adcs-
 DEBIAN> cd vaultwarden-stack-SSO
 DEBIAN> sudo install -o root -g root -m 644 vault.crt  deploy/caddy/certs/vault.crt
 DEBIAN> sudo install -o root -g root -m 600 vault.key  deploy/caddy/certs/vault.key
-DEBIAN> sudo install -o root -g root -m 644 adcs-root.crt deploy/docker/adcs-root.crt
-DEBIAN> rm -f vault.crt vault.key vault.pfx adcs-root.crt adcs-root.cer   # copies locales transitoires
+DEBIAN> sudo install -o root -g root -m 644 adcs-root.pem deploy/docker/adcs-root.crt
+DEBIAN> rm -f vault.crt vault.key auth-vw.pfx auth-vw.pem adcs-root.pem   # copies locales transitoires
 ```
 
 ### 1.3 Secrets applicatifs
@@ -189,7 +177,14 @@ DEBIAN> docker exec vaultwarden curl -fsS https://vault.vaultwardensso.local/ali
 
 **Fichier** : `deploy/kerberos/Setup-KerberosSPNEGO-DC.ps1`
 
-### 2.1 Exécution du script
+> **État constaté** : `C:\authentik.keytab` existe déjà sur le DC (cf. capture) — soit le script a déjà tourné, soit le fichier a été pré-positionné. Vérifier avant de relancer quoi que ce soit :
+> ```powershell
+> DC> Get-ADUser -Filter "SamAccountName -eq 'svc-authentik-krb'" -ErrorAction SilentlyContinue
+> ```
+> - **Compte présent** : le script s'arrêtera de lui-même si relancé (garde anti-doublon, §2.1 du script) — ne pas insister, passer directement au transfert (§2.4) après avoir vérifié l'intégrité du keytab.
+> - **Compte absent** (keytab orphelin d'un essai précédent) : supprimer `C:\authentik.keytab` avant de lancer le script, pour repartir sur un état propre et cohérent (le script refuse d'écraser un fichier existant, §6 du script).
+
+### 2.1 Exécution du script (à sauter si le compte existe déjà, cf. ci-dessus)
 
 ```powershell
 DC> cd C:\vaultwarden-stack-SSO\deploy\kerberos
