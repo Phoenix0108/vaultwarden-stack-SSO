@@ -1,38 +1,31 @@
 # =============================================================================
-# OIDCWarden + Caddy - déploiement durci (Security by Design)
+# Vaultwarden + Caddy - déploiement durci (Security by Design)
 # -----------------------------------------------------------------------------
-# Phase 5 : bascule vaultwarden/server:1.36.0 -> timshel/oidcwarden (SSO OIDC
-# Authentik + Trusted Device Encryption). Voir deploy/docs/02_risk_analysis_tde.md
-# pour l'analyse de risque TDE et la procédure break-glass AVANT SSO_ONLY=true.
 # Architecture réseau :
-#   - frontend         : Caddy <-> extérieur (443/80)
-#   - backend           : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy
-#   - authentik_egress  : bridge dédié, seule sortie autorisée = Authentik:443
-#                          (filtrée DOCKER-USER, cf. deploy/firewall/vw-egress-fw.sh)
+#   - frontend   : Caddy <-> extérieur (443/80)
+#   - backend    : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy
+#   - adfs_egress: bridge dédié, seule sortie autorisée = AD FS:443 (filtrée DOCKER-USER)
 # Durcissement conteneur : no-new-privileges, cap_drop ALL, read_only + tmpfs.
-# Secrets : ADMIN_TOKEN, SSO_CLIENT_SECRET via .env (hors dépôt versionné).
+# Secret : ADMIN_TOKEN et SSO_CLIENT_SECRET via .env (hors dépôt versionné).
 # =============================================================================
 services:
   vaultwarden:
     build:
-      context: ./            # image dérivée : Dockerfile embarque la CA racine AD CS + épingle la version OIDCWarden
+      context: ./            # image dérivée : Dockerfile embarque la CA racine AD CS + épingle la version
     container_name: vaultwarden
     restart: unless-stopped
     environment:
       DOMAIN: "https://vault.vaultwardensso.local/"
       SIGNUPS_ALLOWED: "false"
       ADMIN_TOKEN: "${VW_ADMIN_TOKEN}"          # depuis .env
-      # --- SSO OIDC (Authentik) — noms de variables vérifiés contre SSO.md du fork au moment de la rédaction ---
+      # --- SSO OIDC (voir vaultwarden.env.example pour le détail commenté) ---
       SSO_ENABLED: "true"
-      SSO_ONLY: "false"                         # NE PASSER A "true" QU'APRES validation du break-glass (gate Phase 5.7)
+      SSO_ONLY: "true"                          # break-glass à prévoir ; "false" en phase de test
       SSO_CLIENT_ID: "${VW_SSO_CLIENT_ID}"
-      SSO_CLIENT_SECRET: "${VW_SSO_CLIENT_SECRET}"   # pas de variante _FILE dans ce fork : rester sur env var via .env
-      SSO_AUTHORITY: "${VW_SSO_AUTHORITY}"      # coller VERBATIM depuis /application/o/<slug>/.well-known/openid-configuration (issuer, casse exacte)
-      SSO_SCOPES: "email profile offline_access"
-      SSO_SIGNUPS_MATCH_EMAIL: "true"
-      SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION: "false"   # Authentik émet email_verified en booléen JSON valide
-      SSO_ORGANIZATIONS_ENABLED: "true"         # mapping groupe AD -> Organization, prérequis TDE
-      SSO_TRUSTED_DEVICE_ENCRYPTION: "true"
+      SSO_CLIENT_SECRET: "${VW_SSO_CLIENT_SECRET}"   # cible : SSO_CLIENT_SECRET_FILE + secret Docker
+      SSO_AUTHORITY: "https://SRVADTEST.vaultwardensso.local/adfs"   # CASSE EXACTE de l'issuer
+      SSO_SCOPES: "email profile offline_access"     # openid ajouté automatiquement
+      SSO_ALLOW_UNKNOWN_EMAIL_VERIFICATION: "true"   # AD FS n'émet pas email_verified
       SSO_PKCE: "true"
       # --- Journalisation : régime NORMAL (pas de jetons en clair) ---
       LOG_LEVEL: "info"
@@ -41,7 +34,7 @@ services:
       - ./vw-data:/data/
     networks:
       - backend
-      - authentik_egress
+      - adfs_egress
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -49,8 +42,8 @@ services:
     read_only: true                  # rootfs immuable ...
     tmpfs:
       - /tmp                         # ... /data (volume) reste le seul point d'écriture
-    # extra_hosts:                   # a decommenter UNIQUEMENT si le resolveur Docker ne resout pas
-    #   - "auth.vaultwardensso.local:<AUTHENTIK_IP>"   # auth.* via le DNS AD (lecon retrospective legacy, piege #1)
+    extra_hosts:
+      - "srvadtest.vaultwardensso.local:192.168.100.93"   # résolution statique de l'IdP (dépendance critique)
     deploy:
       resources:
         limits:                      # anti-DoS : borne l'impact d'une saturation
@@ -72,7 +65,6 @@ services:
       - "80:80"                      # redirect HTTP -> HTTPS
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/certs:/etc/caddy/certs:ro   # vault.crt (chaîne complète) + vault.key (600, root) — AC interne AD CS
       - caddy-data:/data
       - caddy-config:/config
       - ./caddy/logs:/var/log/caddy
@@ -94,14 +86,14 @@ services:
 networks:
   frontend: {}
   backend:
-    internal: true                   # Vaultwarden reste injoignable hors Caddy (aucun egress WAN/LAN)
-  authentik_egress:
+    internal: true                   # Vaultwarden reste injoignable hors Caddy (aucun egress WAN)
+  adfs_egress:
     driver: bridge
     driver_opts:
-      com.docker.network.bridge.name: br-authentik   # nom d'IF stable pour le pare-feu hôte
+      com.docker.network.bridge.name: br-adfs   # nom d'IF stable pour le pare-feu hôte
     ipam:
       config:
-        - subnet: 172.31.10.0/29     # /29 = 6 IP utiles : surface minimale
+        - subnet: 172.31.9.0/29      # /29 = 6 IP utiles : surface minimale
 
 volumes:
   caddy-data: {}

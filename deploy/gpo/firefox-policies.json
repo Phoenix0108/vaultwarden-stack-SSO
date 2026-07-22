@@ -1,0 +1,7 @@
+{
+  "policies": {
+    "NegotiateAuth": {
+      "Trusted": ["https://auth.vaultwardensso.local"]
+    }
+  }
+}

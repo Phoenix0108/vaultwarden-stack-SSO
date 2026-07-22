@@ -7,7 +7,6 @@
 # et survit à un restart de Docker (script idempotent).
 # -----------------------------------------------------------------------------
 # Installation :
-#   # Renseigner AUTHENTIK_IP dans vw-egress-fw.sh avant l'installation.
 #   sudo cp deploy/firewall/vw-egress-fw.sh /usr/local/sbin/ && sudo chmod 700 /usr/local/sbin/vw-egress-fw.sh
 #   sudo cp deploy/systemd/vw-egress-fw.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now vw-egress-fw.service

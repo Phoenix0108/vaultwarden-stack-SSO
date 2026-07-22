@@ -1,0 +1,20 @@
+# Secrets — jamais versionnés
+.env
+*.env
+!*.env.example
+deploy/caddy/certs/*
+!deploy/caddy/certs/.gitkeep
+deploy/docker/adcs-root.crt
+*.keytab
+*.key
+*.pfx
+*.pem
+!*.example.pem
+
+# Données runtime
+deploy/docker/vw-data/
+deploy/caddy/logs/
+
+# Divers
+*.log
+.DS_Store

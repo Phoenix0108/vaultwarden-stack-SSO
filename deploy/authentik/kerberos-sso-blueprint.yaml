@@ -1,0 +1,89 @@
+# =============================================================================
+# Blueprint Authentik — Source Kerberos SPNEGO + redirection auto sur le flow
+# de connexion par defaut.
+# -----------------------------------------------------------------------------
+# A importer via Admin > System > Blueprints (ou `ak import_blueprint`).
+# Ne couvre PAS l'upload du keytab (binaire, secret) : celui-ci reste une
+# action manuelle post-import (cf. deploy/authentik/README.md, etape 1).
+# Placeholders a substituer AVANT import : <KERBEROS_SOURCE_SLUG> peut rester
+# tel quel, <CLIENT_SUBNET> DOIT etre remplace par le CIDR reel du LAN client.
+# =============================================================================
+version: 1
+metadata:
+  name: "Kerberos SPNEGO SSO - Vaultwarden"
+entries:
+  # ---------------------------------------------------------------------------
+  # 1. Source Kerberos. Le champ "keytab" reste vide ici (secret) : a coller en
+  #    base64 dans l'UI apres import (Directory > Federation & Social login >
+  #    Kerberos SPNEGO SSO). Ne JAMAIS committer le contenu du keytab.
+  # ---------------------------------------------------------------------------
+  - model: authentik_sources_kerberos.kerberossource
+    id: kerberos-source
+    identifiers:
+      slug: kerberos-sso
+    attrs:
+      name: "Kerberos SPNEGO SSO"
+      enabled: true
+      realm: "VAULTWARDENSSO.LOCAL"
+      spnego_server_name: "HTTP/auth.vaultwardensso.local"
+      spnego_keytab: ""              # a renseigner manuellement (base64), jamais en clair dans ce fichier
+      password_login_update_internal_password: false
+      sync_users: false              # provisioning = monopole de la source LDAP existante (OU=Vaultwarden)
+      sync_users_password: false
+      user_matching_mode: "username_deny"   # apparie sur username/sAMAccountName ; DENY si inconnu -> jamais de creation
+      user_path_template: "goauthentik.io/sources/%(slug)s"
+
+  # ---------------------------------------------------------------------------
+  # 2. Expression Policy : redirige vers la source Kerberos UNIQUEMENT si la
+  #    requete vient du CLIENT_SUBNET intranet. Hors subnet -> fallback
+  #    formulaire mot de passe (le stage password du flow n'est pas supprime).
+  # ---------------------------------------------------------------------------
+  - model: authentik_policies_expression.expressionpolicy
+    id: kerberos-redirect-policy
+    identifiers:
+      name: "redirect-kerberos-if-intranet"
+    attrs:
+      expression: |
+        # Redirige vers la source Kerberos si le client est sur le LAN intranet.
+        # <CLIENT_SUBNET> = CIDR reel a substituer avant import (ex: 192.168.100.0/24).
+        import ipaddress
+
+        client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
+        remote_ip = request.http_request.META.get("REMOTE_ADDR", "")
+
+        try:
+            in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
+        except ValueError:
+            in_subnet = False
+
+        if in_subnet:
+            return ak_create_flow_link_url(
+                "authentik_sources_kerberos:oauth-client-login",
+                kwargs={"source_slug": "kerberos-sso"},
+            )
+        return True
+
+  # ---------------------------------------------------------------------------
+  # 3. Binding de la policy sur le stage d'identification du flow par defaut.
+  #    order bas = evaluee tot. Le flow/slug par defaut peut varier selon
+  #    l'installation : verifier le slug reel avant import (Flows > Identification).
+  # ---------------------------------------------------------------------------
+  - model: authentik_flows.flowstagebinding
+    id: identification-stage-binding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      stage: !Find [authentik_stages_identification.identificationstage, [name, default-authentication-identification]]
+      order: 10
+    attrs:
+      policy_engine_mode: "any"
+
+  - model: authentik_policies.policybinding
+    id: kerberos-redirect-binding
+    identifiers:
+      target: !KeyOf identification-stage-binding
+      policy: !KeyOf kerberos-redirect-policy
+      order: 0
+    attrs:
+      enabled: true
+      negate: false
+      timeout: 30

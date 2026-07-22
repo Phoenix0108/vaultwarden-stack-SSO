@@ -1,11 +1,8 @@
 # =============================================================================
 # Caddyfile — reverse proxy TLS pour Vaultwarden
 # -----------------------------------------------------------------------------
-# Certificat serveur emis par l'AC interne (AD CS Enterprise Root,
-# thumbprint 473BAAC9189D52715E3E73CED9BEC691293BED10). Chaine complete
-# (leaf + intermediaires eventuels) dans vault.crt, cle privee dans vault.key.
-# Jamais "tls internal" en cible : la chaine doit remonter jusqu'a l'AC
-# interne pour etre approuvee par les postes du domaine (GPO trust store).
+# En lab : tls internal (CA Caddy). EN CIBLE : remplacer par un certificat serveur
+# émis par l'AC interne (AD CS) pour une chaîne approuvée jusqu'au navigateur.
 # =============================================================================
 {
     # Point d'admin Caddy désactivé (réduction de surface)
@@ -21,7 +18,8 @@
 }
 
 vault.vaultwardensso.local {
-    tls /etc/caddy/certs/vault.crt /etc/caddy/certs/vault.key
+    # LAB : CA interne Caddy. CIBLE : tls /etc/caddy/certs/vault.crt /etc/caddy/certs/vault.key
+    tls internal
 
     encode gzip zstd
 

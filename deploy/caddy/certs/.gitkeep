@@ -1,0 +1,6 @@
+Placer ici avant "docker compose up -d caddy" :
+  - vault.crt : leaf + chaine (AC AD CS, thumbprint 473BAAC9189D52715E3E73CED9BEC691293BED10)
+  - vault.key : cle privee, chmod 600, owner root, JAMAIS versionnee (voir .gitignore)
+
+Ni vault.crt ni vault.key ne doivent etre commit. Ce fichier existe uniquement
+pour que le repertoire soit present dans le depot.

@@ -1,70 +1,81 @@
-# Projet — Vaultwarden SSO OIDC ↔ AD FS (déploiement propre, Security by Design)
+# Projet — SSO Kerberos passwordless de bout en bout (Vaultwarden/OIDCWarden ↔ Authentik ↔ AD)
 
-Ensemble de livrables pour redéployer **proprement, de zéro**, l'intégration SSO OpenID Connect entre Vaultwarden (self-hosted, Docker + Caddy) et AD FS, avec une posture de sécurité intégrée dès la conception.
+Livrables pour un SSO passwordless intranet : ouverture de session Windows (Kerberos SPNEGO) → Authentik (IdP OIDC) → OIDCWarden (fork Vaultwarden, Trusted Device Encryption), sans ressaisie du mot de passe AD ni, après onboarding, du master password.
+
+> **Historique** : ce projet succède à une itération AD FS abandonnée. Voir `legacy/` (conservé pour mémoire — rétrospective et pièges rencontrés — mais **non maintenu et non réutilisable tel quel**).
+
+## Contexte figé
+
+| Élément | Valeur |
+|---|---|
+| DC (AD DS + AD CS + DNS) | Windows Server 2016, `192.168.100.76` |
+| Hôte Docker | Debian 13, `192.168.100.89` |
+| IdP OIDC | Authentik, `auth.vaultwardensso.local` |
+| SP | Vaultwarden 1.36.0 → bascule prévue OIDCWarden (Phase 5) |
+| CA | AD CS Enterprise Root, thumbprint `473BAAC9189D52715E3E73CED9BEC691293BED10` |
 
 ## Contenu
 
 ```
-vaultwarden-sso-projet/
-├── README.md                              # ce fichier (orchestration)
-├── .gitignore                             # exclut secrets, CA, data, annexes
-├── docs/
-│   └── 00_RETROSPECTIVE_embuches.md       # journal des embûches : causes, résolutions, leçons
-├── runbook/
-│   └── RUNBOOK_installation_propre.md     # procédure pas-à-pas, couche par couche
-└── deploy/
-    ├── adfs/
-    │   ├── Prepare-AdfsHost.ps1           # prérequis DC/AD FS : DNS, NLA, firewall, cohérence
-    │   ├── Export-AdcsRoot.ps1            # export CA racine + empreinte
-    │   ├── Deploy-VaultwardenAdfs.ps1     # config AD FS complète (mode groupe / tous)
-    │   └── Check-UpnMailInvariant.ps1     # contrôle compensatoire périodique -> SIEM
-    ├── docker/
-    │   ├── docker-compose.yml             # stack durcie (segmentation, cap_drop, read_only)
-    │   ├── Dockerfile                     # image dérivée : CA AD CS + épinglage version
-    │   ├── .env.example                   # secrets (à copier en .env, chmod 600)
-    │   └── vaultwarden.env.example        # référence variables SSO commentées
-    ├── caddy/
-    │   └── Caddyfile                      # reverse proxy TLS durci
-    ├── firewall/
-    │   └── vw-egress-fw.sh                # allow-list egress DOCKER-USER (idempotent)
-    └── systemd/
-        └── vw-egress-fw.service           # persistance After=docker.service
+deploy/
+├── caddy/
+│   ├── Caddyfile                     # reverse proxy TLS, chaîne AD CS (Phase 1)
+│   └── certs/                        # vault.crt + vault.key (non versionnés, voir .gitignore)
+├── docker/
+│   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden (Phases 1 et 5)
+│   ├── Dockerfile                    # image dérivée : embarque la CA AD CS, version OIDCWarden épinglée
+│   └── .env.example                  # secrets (à copier en .env, chmod 600)
+├── kerberos/
+│   └── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
+├── authentik/
+│   ├── kerberos-sso-blueprint.yaml   # Source Kerberos + policy de redirection (Phase 3)
+│   └── README.md                     # étapes manuelles (upload keytab) + gates
+├── gpo/
+│   ├── Deploy-KerberosSSO-GPO.ps1    # GPO navigateurs + pré-provisioning Bitwarden (Phase 4)
+│   ├── firefox-policies.json         # network.negotiate-auth.trusted-uris
+│   └── Deploy-BitwardenClients.reg   # variante manuelle poste par poste
+├── firewall/
+│   └── vw-egress-fw.sh               # allow-list egress DOCKER-USER vers Authentik (Phase 5)
+└── systemd/
+    └── vw-egress-fw.service          # persistance After=docker.service
+
+docs/
+├── 01_architecture.md                # flux, séquence d'authentification, plans réseau
+├── 02_risk_analysis_tde.md           # analyse de risque Trusted Device Encryption (Phase 5)
+└── 03_supervision_siem.md            # points de collecte SIEM, hygiène, déprovisionnement (Phase 6)
+
+runbook/
+└── RUNBOOK_evaluation.md             # doc de test end-to-end, phase par phase, gates et commandes
 ```
 
-## Ordre de déploiement (couche par couche — une étape, une validation)
+## Ordre de déploiement (une couche = une validation)
 
-| # | Étape | Fichier / commande | Validation |
+| Phase | Étape | Fichier / commande | Gate |
 |---|---|---|---|
-| 1 | Prérequis AD/AD FS | `Prepare-AdfsHost.ps1 -DcIp <ip> -ClientSubnet <cidr> -BounceNic` | `NetworkCategory=DomainAuthenticated`, 443 scopé |
-| 2 | Export CA racine | `Export-AdcsRoot.ps1 -CaRootCn <cn>` | empreinte SHA-1 notée |
-| 3 | Config AD FS | `Deploy-VaultwardenAdfs.ps1 -VaultFqdn <fqdn> -AccessMode Group -GroupName <grp> -ResetSecret` | `ScopeNames` inclut `allatclaims` |
-| 4 | Réseau Docker + egress | `docker compose up -d` + `systemctl enable --now vw-egress-fw.service` | `DOCKER-USER` = 4 règles, DROP=0 |
-| 5 | TLS | transfert `adcs-root.cer` + vérif empreinte + `docker compose build` | `curl` conteneur → JSON |
-| 6 | Vaultwarden | `.env` renseigné + `docker compose up -d` | login test → JIT dans `/admin` |
-| 7 | Hygiène | retrait debug, purge logs | plus de jetons dans les logs |
+| 1 | TLS Caddy (chaîne AD CS) | `deploy/caddy/Caddyfile`, `deploy/docker/docker-compose.yml`, `docker compose up -d caddy` | `openssl s_client` → issuer AD CS, `Verify return code: 0` ; `docker exec vaultwarden curl -fsS https://vault.../alive` |
+| 2 | Compte de service + SPN + keytab (DC) | `deploy/kerberos/Setup-KerberosSPNEGO-DC.ps1` | Script auto-vérifié (anti-doublon SPN, msDS-SupportedEncryptionTypes=24, kvno, SHA-256 keytab) ; validation réelle en Phase 3 |
+| 3 | Kerberos Source Authentik + flow SPNEGO | `deploy/authentik/kerberos-sso-blueprint.yaml` + `README.md` | Poste domaine → aucun formulaire ; poste hors domaine → fallback password |
+| 4 | GPO postes clients (négociation Kerberos navigateurs) | `deploy/gpo/Deploy-KerberosSSO-GPO.ps1` | `gpresult /r` + header `Authorization: Negotiate` |
+| 5 | Bascule OIDCWarden + TDE | `deploy/docker/*` mis à jour, `docs/02_risk_analysis_tde.md` | Login SSO complet, device approval, master password non redemandé |
+| 6 | Hygiène, supervision, runbook final | `docs/03_supervision_siem.md` | Purge debug, SIEM, matrice de déprovisionnement |
 
-## Choix du modèle d'accès
-
-Le script `Deploy-VaultwardenAdfs.ps1` accepte `-AccessMode` :
-- **`Group`** (recommandé) : accès restreint à `-GroupName` (moindre privilège).
-- **`Everyone`** : tous les utilisateurs du domaine. **Impose** MFA (`-EnableMfa` auto-activé) + supervision renforcée. Voir l'analyse de risque dans le runbook.
+**Les 6 phases sont livrées.** Aucune n'a été exécutée contre l'infrastructure réelle (pas d'accès réseau à `192.168.100.0/24` depuis l'environnement d'édition) : chaque gate reste à valider par vous. Voir `runbook/RUNBOOK_evaluation.md` pour le parcours de test consolidé, phase par phase, avec les placeholders à substituer avant exécution.
 
 ## Points de sécurité clés (rappel)
 
-- **Segmentation** : `backend` interne (ingress Caddy only) + `adfs_egress` filtré (seul AD FS:443).
-- **Filtrage symétrique** : firewall Windows inbound scopé ↔ `DOCKER-USER` egress scopé.
-- **PKI/TLS** : confiance ajoutée à la CA interne (jamais `--insecure`), version épinglée.
-- **IAM** : barrière d'accès à l'IdP (`allatclaims` + politique de groupe), JIT provisioning, matrice de déprovisionnement (pas de SCIM → geste manuel + rotation secrets partagés).
-- **Supervision** : audit AD FS event 501, firewall LogBlocked, compteur `VW-EGRESS-DROP` → SIEM.
-- **Hygiène debug** : `SSO_DEBUG_TOKENS`/`Log all tokens` jamais en continu + purge des logs.
+- **PKI/TLS** : confiance ajoutée à la CA interne (jamais `--insecure`/`tls internal` en cible), version d'image épinglée.
+- **IAM (Phase 2)** : compte de service Kerberos moindre privilège — `Domain Users` seul, `AccountNotDelegated`, AES only (jamais RC4/DES), refus de logon interactif porté par GPO sur un groupe dédié.
+- **IAM (Phase 3)** : provisioning des comptes = monopole de la source LDAP (`OU=Vaultwarden`) ; la source Kerberos est en `user_matching_mode=username_deny` et ne crée jamais de compte.
+- **Secrets** : mot de passe du compte de service et keytab jamais affichés/loggés ; keytab traité comme un secret sensible (équivalent au mot de passe du compte), transfert exclusivement via `smbclient` (jamais RDP clipboard), intégrité vérifiée par SHA-256 des deux côtés, suppression du DC après transfert.
+- **Moindre privilège navigateurs (Phase 4)** : allowlist stricte à un seul FQDN (jamais de wildcard `*.local`), `AuthNegotiateDelegateAllowlist` volontairement non configuré (pas de délégation Kerberos).
+- **TDE (Phase 5)** : master password saisi une seule fois par device ; compensations obligatoires (BitLocker, verrouillage de session, break-glass hors organization SSO) détaillées dans `docs/02_risk_analysis_tde.md`. MFA Authentik identifié comme dette prioritaire — le SPNEGO ne doit pas devenir un contournement.
+- **Encodage** : scripts PowerShell 100 % ASCII, splatting (pas de backticks de continuation) — leçons de la rétrospective AD FS (`legacy/docs/00_RETROSPECTIVE_embuches.md`).
 
 ## Dette de sécurité à traiter (cible production)
 
-1. Séparer les rôles tier-0 (DC/AC/AD FS colocalisés = SPOF).
-2. PKI deux niveaux (racine offline).
-3. AD FS derrière un WAP en DMZ (ne pas exposer le tier-0 aux clients).
-4. Secret client via secret Docker (`SSO_CLIENT_SECRET_FILE`).
-5. Règles firewall en GPO (pas en local).
-6. Caddy avec certificat de l'AC interne (pas `tls internal`).
+1. CDP LDAP-only sur la chaîne AD CS → ajouter un CDP HTTP avant prod (sinon la vérification de révocation échoue hors domaine).
+2. SPOF tier-0 (DC/AC colocalisés) — hérité de l'itération précédente, toujours d'actualité.
+3. PKI mono-niveau (racine en ligne) — cible : racine offline + AC émettrice.
+4. MFA côté Authentik : le SPNEGO ne doit pas devenir un contournement du MFA prévu (arbitrage à faire, cf. brief Phase 5).
 
-Voir `docs/00_RETROSPECTIVE_embuches.md` pour le détail et `runbook/RUNBOOK_installation_propre.md` pour la mise en œuvre.
+Voir `legacy/docs/00_RETROSPECTIVE_embuches.md` pour l'historique des pièges déjà rencontrés (DNS, egress Docker, NLA, CA, casse issuer, etc.) — plusieurs restent pertinents dans la nouvelle architecture.
