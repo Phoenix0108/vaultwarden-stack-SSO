@@ -20,6 +20,12 @@
 #                            (Vaultwarden et le reste d'Authentik n'y ont pas acces)
 #   - authentik_internal  : internal=true -> authentik-server/worker <-> postgresql/redis
 #                            (jamais expose a Caddy ni a Vaultwarden)
+#   - authentik_ldap_egress : NON internal -> authentik-server/worker -> DC (LDAPS 636,
+#                            Source LDAP Phase 2bis). Seul reseau non-internal en dehors de
+#                            frontend : Docker ne permet pas de restreindre un reseau bridge a
+#                            une IP/port precis nativement -- si un filtrage host (DOCKER-USER,
+#                            allow uniquement IP_DC:636) est requis, cf. dette de securite dans
+#                            README.md (aucun filtrage host applique par defaut ici).
 # Durcissement conteneur : no-new-privileges, cap_drop ALL (sauf mention contraire),
 # read_only + tmpfs pour Vaultwarden/Caddy. Secrets via .env (hors dépôt versionné).
 # =============================================================================
@@ -170,6 +176,7 @@ services:
     networks:
       authentik_internal: {}
       authentik_proxy: {}             # seul point d'entree : Caddy, via ce reseau
+      authentik_ldap_egress: {}       # requis pour la Source LDAP (bind/search vers le DC, LDAPS 636)
     depends_on:
       postgresql:
         condition: service_healthy
@@ -190,7 +197,8 @@ services:
       - authentik-templates:/templates
       - authentik-certs:/certs
     networks:
-      - authentik_internal            # pas besoin d'authentik_proxy : jamais contacte par Caddy
+      authentik_internal: {}          # pas besoin d'authentik_proxy : jamais contacte par Caddy
+      authentik_ldap_egress: {}       # sync planifiee de la Source LDAP executee par le worker
     depends_on:
       postgresql:
         condition: service_healthy
@@ -211,6 +219,7 @@ networks:
     internal: true                   # Caddy <-> authentik-server uniquement
   authentik_internal:
     internal: true                   # authentik-server/worker <-> postgresql/redis uniquement
+  authentik_ldap_egress: {}          # NON internal : authentik-server/worker -> DC (LAN, LDAPS 636) -- cf. commentaire en tete de fichier
 
 volumes:
   caddy-data: {}

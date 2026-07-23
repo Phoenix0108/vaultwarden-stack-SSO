@@ -78,5 +78,6 @@ runbook/
 2. SPOF tier-0 (DC/AC colocalisés) — hérité de l'itération précédente, toujours d'actualité.
 3. PKI mono-niveau (racine en ligne) — cible : racine offline + AC émettrice.
 4. MFA côté Authentik : le SPNEGO ne doit pas devenir un contournement du MFA prévu (arbitrage à faire, cf. brief Phase 5).
+5. Réseau `authentik_ldap_egress` (Phase 2bis, Source LDAP) : réseau Docker non-`internal` par nécessité (authentik-server/worker doivent joindre le DC en LDAPS 636 sur le LAN), mais Docker ne permet pas nativement de restreindre un réseau bridge à une IP/port précis — sans filtrage host (`DOCKER-USER`/iptables scopé à `IP_DC:636`), ce réseau autorise en théorie tout egress LAN/WAN depuis authentik-server/worker. À durcir avant prod.
 
 Voir `legacy/docs/00_RETROSPECTIVE_embuches.md` pour l'historique des pièges déjà rencontrés (DNS, egress Docker, NLA, CA, casse issuer, etc.) — plusieurs restent pertinents dans la nouvelle architecture.
