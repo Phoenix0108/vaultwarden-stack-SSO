@@ -44,6 +44,27 @@ entries:
       realm: "VAULTWARDENSSO.LOCAL"
       spnego_server_name: "HTTP/auth.vaultwardensso.local"
       spnego_keytab: ""              # a renseigner manuellement (base64), jamais en clair dans ce fichier
+      # krb5_conf vide = "config systeme par defaut" (doc officielle), qui n'a AUCUN
+      # default_realm dans un conteneur Authentik generique. Confirme en lab : sans ce
+      # bloc, la recherche de l'entree keytab se fait avec un royaume vide au lieu de
+      # VAULTWARDENSSO.LOCAL -> "No key table entry found matching HTTP/auth.../@"
+      # (royaume vide apres le @) alors que le keytab contient bien l'entree avec le
+      # royaume explicite. dns_lookup_* a false : le DNS du host Docker (non domain-joint)
+      # ne resout pas les enregistrements SRV Kerberos, autant s'appuyer uniquement sur
+      # les entrees statiques ci-dessous plutot que de risquer un echec de resolution.
+      krb5_conf: |
+        [libdefaults]
+            default_realm = VAULTWARDENSSO.LOCAL
+            dns_lookup_realm = false
+            dns_lookup_kdc = false
+        [realms]
+            VAULTWARDENSSO.LOCAL = {
+                kdc = 192.168.100.76
+                admin_server = 192.168.100.76
+            }
+        [domain_realm]
+            .vaultwardensso.local = VAULTWARDENSSO.LOCAL
+            vaultwardensso.local = VAULTWARDENSSO.LOCAL
       password_login_update_internal_password: false
       sync_users: false              # provisioning = monopole de la source LDAP existante (OU=Vaultwarden)
       sync_users_password: false
