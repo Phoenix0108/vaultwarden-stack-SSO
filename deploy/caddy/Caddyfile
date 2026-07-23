@@ -1,19 +1,25 @@
 # =============================================================================
 # Caddyfile — reverse proxy TLS pour Vaultwarden ET Authentik (tout passe par Caddy)
 # -----------------------------------------------------------------------------
-# Certificat serveur emis par l'AC interne (AD CS Enterprise Root,
-# thumbprint 473BAAC9189D52715E3E73CED9BEC691293BED10). Chaine complete
-# (leaf + intermediaires eventuels) dans vault.crt, cle privee dans vault.key.
-# Le certificat DOIT porter un SAN pour vault.vaultwardensso.local ET
-# auth.vaultwardensso.local (les deux vhosts ci-dessous partagent le meme
-# fichier) -- genere par deploy/tls/New-VaultCertDC.ps1 -AuthHostname.
+# Certificat serveur emis par VOTRE AC interne (AD CS Enterprise Root -- verifier
+# l'empreinte SHA-1 depuis deploy/environment.env, CA_ROOT_THUMBPRINT). Chaine
+# complete (leaf + intermediaires eventuels) dans vault.crt, cle privee dans
+# vault.key. Le certificat DOIT porter un SAN pour VAULT_HOSTNAME ET
+# AUTH_HOSTNAME (les deux vhosts ci-dessous partagent le meme fichier) --
+# genere par deploy/tls/New-VaultCertDC.ps1.
 # Jamais "tls internal" en cible : la chaine doit remonter jusqu'a l'AC
 # interne pour etre approuvee par les postes du domaine (GPO trust store).
 # -----------------------------------------------------------------------------
-# auth.vaultwardensso.local est un reverse proxy pur vers authentik-server
-# (meme VM, meme docker-compose, reseau Docker interne authentik_proxy -- pas
-# d'IP LAN a connaitre). Caddy ne comprend pas SPNEGO/Kerberos, il transmet tel
-# quel l'en-tete Negotiate/Authorization ; la validation du ticket se fait cote
+# {$VAULT_HOSTNAME} et {$AUTH_HOSTNAME} : syntaxe Caddy de lecture de variable
+# d'environnement du PROCESSUS Caddy (pas docker-compose) -- injectees par
+# docker-compose.yml (service caddy, bloc environment:), lui-meme depuis .env
+# (VAULT_HOSTNAME/AUTH_HOSTNAME, cf. deploy/docker/.env.example). Rien a
+# editer dans ce fichier pour changer de domaine.
+# -----------------------------------------------------------------------------
+# AUTH_HOSTNAME est un reverse proxy pur vers authentik-server (meme VM, meme
+# docker-compose, reseau Docker interne authentik_proxy -- pas d'IP LAN a
+# connaitre). Caddy ne comprend pas SPNEGO/Kerberos, il transmet tel quel
+# l'en-tete Negotiate/Authorization ; la validation du ticket se fait cote
 # Authentik avec son propre keytab.
 # =============================================================================
 {
@@ -29,7 +35,7 @@
     }
 }
 
-vault.vaultwardensso.local {
+{$VAULT_HOSTNAME} {
     tls /etc/caddy/certs/vault.crt /etc/caddy/certs/vault.key
 
     encode gzip zstd
@@ -55,7 +61,7 @@ vault.vaultwardensso.local {
     reverse_proxy vaultwarden:80
 }
 
-auth.vaultwardensso.local {
+{$AUTH_HOSTNAME} {
     tls /etc/caddy/certs/vault.crt /etc/caddy/certs/vault.key
 
     header {

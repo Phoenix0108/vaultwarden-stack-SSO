@@ -5,8 +5,18 @@
 # A importer via Admin > System > Blueprints (ou `ak import_blueprint`).
 # Ne couvre PAS l'upload du keytab (binaire, secret) : celui-ci reste une
 # action manuelle post-import (cf. deploy/authentik/README.md, etape 1).
-# Placeholders a substituer AVANT import : <KERBEROS_SOURCE_SLUG> peut rester
-# tel quel, <CLIENT_SUBNET> DOIT etre remplace par le CIDR reel du LAN client.
+# -----------------------------------------------------------------------------
+# CE FICHIER EST UN TEMPLATE : ne jamais l'importer tel quel. Les placeholders
+# ci-dessous (<REALM>, <DC_IP>, <DOMAIN_DNS>, <CLIENT_SUBNETS_PYLIST>) sont
+# substitues automatiquement depuis deploy/environment.env par :
+#   deploy/authentik/render-blueprint.sh
+# (lit REALM, DC_IP, DOMAIN_DNS, CLIENT_SUBNETS -- voir
+# deploy/environment.env.example pour le format). Produit
+# kerberos-sso-blueprint.rendered.yaml (jamais versionne), c'est CE fichier
+# rendu qu'il faut importer, jamais le template source. CLIENT_SUBNETS accepte
+# une liste de CIDR separes par des virgules : plusieurs reseaux/VLAN clients
+# (LAN filaire, WiFi corporate, VPN site-to-site, autre site AD...) peuvent
+# ainsi declencher la redirection Kerberos automatique, pas un seul.
 # -----------------------------------------------------------------------------
 # Mecanique de redirection (verifiee contre le code source authentik, apres
 # plusieurs tentatives infructueuses par simple lecture de doc) :
@@ -48,7 +58,7 @@ entries:
       # default-source-authentication = flow standard livre par defaut avec Authentik
       # pour ce role (authentification d'un utilisateur existant via une source).
       authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
-      realm: "VAULTWARDENSSO.LOCAL"
+      realm: "<REALM>"
       # spnego_server_name VOLONTAIREMENT VIDE -- ne pas renseigner "HTTP/auth.vaultwardensso.local"
       # ici. Diagnostic complet en lab (via ak shell, cf. historique de commits) : le code
       # d'Authentik (get_gssapi_creds) construit un gssapi.names.Name(..., name_type=
@@ -75,21 +85,25 @@ entries:
       # bonne pratique : dns_lookup_* et rdns/dns_canonicalize_hostname a false car le host
       # Docker (non domain-joint) ne resout pas les enregistrements DNS de la zone AD --
       # autant s'appuyer uniquement sur les entrees statiques ci-dessous.
+      # Un seul KDC (kdc=) est renseigne ici par le render script -- site AD
+      # unique. Plusieurs sites/KDC secondaires : ajouter des lignes "kdc = ..."
+      # supplementaires a la main dans le fichier rendu (kerberos-sso-blueprint
+      # .rendered.yaml) avant import, une par KDC.
       krb5_conf: |
         [libdefaults]
-            default_realm = VAULTWARDENSSO.LOCAL
+            default_realm = <REALM>
             dns_lookup_realm = false
             dns_lookup_kdc = false
             rdns = false
             dns_canonicalize_hostname = false
         [realms]
-            VAULTWARDENSSO.LOCAL = {
-                kdc = 192.168.100.76
-                admin_server = 192.168.100.76
+            <REALM> = {
+                kdc = <DC_IP>
+                admin_server = <DC_IP>
             }
         [domain_realm]
-            .vaultwardensso.local = VAULTWARDENSSO.LOCAL
-            vaultwardensso.local = VAULTWARDENSSO.LOCAL
+            .<DOMAIN_DNS> = <REALM>
+            <DOMAIN_DNS> = <REALM>
       password_login_update_internal_password: false
       sync_users: false              # provisioning = monopole de la source LDAP existante (OU=Vaultwarden)
       sync_users_password: false
@@ -113,10 +127,14 @@ entries:
       name: "redirect-kerberos-if-intranet"
     attrs:
       expression: |
-        # Renvoie True uniquement si (a) le client semble venir du LAN intranet ET
-        # (b) la connexion est pilotee par une application OAuth2 (Vaultwarden),
-        # pas un acces direct a l'interface Authentik.
-        # <CLIENT_SUBNET> = CIDR reel a substituer avant import (ex: 192.168.100.0/24).
+        # Renvoie True uniquement si (a) le client vient de l'UN des reseaux
+        # clients autorises ET (b) la connexion est pilotee par une application
+        # OAuth2 (Vaultwarden), pas un acces direct a l'interface Authentik.
+        # <CLIENT_SUBNETS_PYLIST> = liste Python de CIDR substituee avant import
+        # par render-blueprint.sh depuis CLIENT_SUBNETS (deploy/environment.env,
+        # CSV) -- ex: ["192.168.100.0/24", "10.20.30.0/24"]. Plusieurs
+        # reseaux/VLAN (LAN filaire, WiFi corporate, VPN site-to-site, autre
+        # site AD...) sont donc supportes nativement, pas un seul CIDR fige.
         #
         # INCIDENT VECU : cette policy est bindee sur default-authentication-flow,
         # qui est PARTAGE par TOUS les logins Authentik -- y compris akadmin et
@@ -156,10 +174,11 @@ entries:
         from urllib.parse import parse_qs
 
         try:
-            client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
+            client_subnets = [ipaddress.ip_network(cidr) for cidr in <CLIENT_SUBNETS_PYLIST>]
             xff = request.http_request.META.get("HTTP_X_FORWARDED_FOR", "")
             remote_ip = xff.split(",")[0].strip() if xff else request.http_request.META.get("REMOTE_ADDR", "")
-            in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
+            remote_addr = ipaddress.ip_address(remote_ip)
+            in_subnet = any(remote_addr in subnet for subnet in client_subnets)
 
             client_id = request.http_request.GET.get("client_id")
             if not client_id:

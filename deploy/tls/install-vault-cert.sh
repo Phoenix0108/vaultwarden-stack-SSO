@@ -35,17 +35,19 @@
 #   REPO_URL, REPO_DIR (def. vaultwarden-stack-SSO), REPO_BRANCH
 #   DC_IP, DC_USER, SMB_PASSWORD, SMB_RETRIES
 #   SPN_HOSTNAME, AUTH_HOSTNAME, ROOT_THUMBPRINT
+# Toutes (sauf REPO_*/SMB_*) sont normalement absentes de l'environnement
+# appelant : ce script sourced automatiquement deploy/environment.env (copie
+# remplie de environment.env.example) des que le depot est disponible --
+# DC_IP/AUTH_HOSTNAME viennent alors directement de ce fichier, SPN_HOSTNAME
+# de VAULT_HOSTNAME, ROOT_THUMBPRINT de CA_ROOT_THUMBPRINT, DC_USER de
+# DOMAIN_NETBIOS. Voir plus bas (etape 0b) -- passer une variable explicitement
+# dans l'environnement appelant reste prioritaire sur environment.env.
 # Tout passe par Caddy : ce script n'a plus besoin de connaitre l'IP reelle
 # d'Authentik (pas d'extra_hosts a renseigner) -- seul AUTHENTIK_UPSTREAM dans
 # .env (docker-compose.yml) en a besoin, a configurer avant la Phase 5.
 # =============================================================================
 set -euo pipefail
 
-DC_IP="${DC_IP:-192.168.100.76}"
-DC_USER="${DC_USER:-VAULTWARDENSSO\\Administrator}"
-SPN_HOSTNAME="${SPN_HOSTNAME:-vault.vaultwardensso.local}"
-AUTH_HOSTNAME="${AUTH_HOSTNAME:-auth.vaultwardensso.local}"
-ROOT_THUMBPRINT="${ROOT_THUMBPRINT:-473BAAC9189D52715E3E73CED9BEC691293BED10}"
 SMB_RETRIES="${SMB_RETRIES:-3}"
 REPO_URL="${REPO_URL:-}"
 REPO_DIR="${REPO_DIR:-vaultwarden-stack-SSO}"
@@ -112,6 +114,32 @@ if [ -n "$DIRTY" ]; then
 elif ! git pull --ff-only origin "$REPO_BRANCH" --quiet; then
     warn "git pull --ff-only a echoue (reseau ? credentials ? deja a jour ?) -- poursuite avec la copie locale telle quelle"
 fi
+
+# --- 0b. Config centrale : sourcer deploy/environment.env si present --------------
+ENV_FILE="$REPO_ROOT/deploy/environment.env"
+if [ -f "$ENV_FILE" ]; then
+    info "Chargement de la config centrale : $ENV_FILE"
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+else
+    warn "$ENV_FILE absent -- copier deploy/environment.env.example vers deploy/environment.env et le renseigner (evite de repasser DC_IP=... etc. en variables d'environnement a chaque execution)."
+fi
+
+DC_IP="${DC_IP:-}"
+AUTH_HOSTNAME="${AUTH_HOSTNAME:-}"
+SPN_HOSTNAME="${SPN_HOSTNAME:-${VAULT_HOSTNAME:-}}"
+ROOT_THUMBPRINT="${ROOT_THUMBPRINT:-${CA_ROOT_THUMBPRINT:-}}"
+if [ -z "${DC_USER:-}" ] && [ -n "${DOMAIN_NETBIOS:-}" ]; then
+    DC_USER="${DOMAIN_NETBIOS}\\Administrator"
+fi
+DC_USER="${DC_USER:-}"
+
+for v in DC_IP DC_USER SPN_HOSTNAME AUTH_HOSTNAME ROOT_THUMBPRINT; do
+    [ -n "${!v}" ] || fail "$v manquant -- renseigner deploy/environment.env (copie de deploy/environment.env.example), ou passer $v=... explicitement en variable d'environnement."
+done
+[ "$ROOT_THUMBPRINT" != "CHANGE_ME_SHA1_THUMBPRINT" ] || fail "CA_ROOT_THUMBPRINT est encore au placeholder dans $ENV_FILE -- le renseigner avant de continuer."
 
 # Relais vers la copie du depot (a jour, avec tous les correctifs) si ce script
 # a ete lance en standalone avant que le depot n'existe -- evite d'executer une
@@ -234,6 +262,22 @@ if [ ! -f .env ]; then
 else
     warn ".env deja present, non modifie (idempotent) -- verifier VW_ADMIN_TOKEN manuellement si besoin"
 fi
+
+# VAULT_HOSTNAME/AUTH_HOSTNAME : pas des secrets, doivent toujours refleter
+# deploy/environment.env (source de verite unique pour les hostnames) --
+# synchronises sans condition ici, contrairement aux secrets ci-dessous qui
+# ne sont jamais regeneres une fois presents.
+sync_hostname() {
+    local var="$1" val="$2"
+    if grep -q "^${var}=" .env 2>/dev/null; then
+        sed -i "s#^${var}=.*#${var}=${val}#" .env
+    else
+        printf '%s=%s\n' "$var" "$val" >> .env
+    fi
+}
+sync_hostname VAULT_HOSTNAME "$SPN_HOSTNAME"
+sync_hostname AUTH_HOSTNAME "$AUTH_HOSTNAME"
+ok ".env : VAULT_HOSTNAME=$SPN_HOSTNAME AUTH_HOSTNAME=$AUTH_HOSTNAME (synchronise depuis deploy/environment.env)"
 
 # PG_PASS / AUTHENTIK_SECRET_KEY : purs secrets d'entropie (Authentik meme VM,
 # meme docker-compose) -- generes automatiquement s'ils sont encore au

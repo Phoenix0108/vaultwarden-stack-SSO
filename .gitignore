@@ -18,3 +18,4 @@ deploy/caddy/logs/
 # Divers
 *.log
 .DS_Store
+deploy/authentik/kerberos-sso-blueprint.rendered.yaml

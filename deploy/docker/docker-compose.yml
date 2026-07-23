@@ -9,13 +9,14 @@
 # passe par le reseau Docker interne. Caddy reste le seul point d'entree (tout
 # passe par Caddy, y compris pour Vaultwarden qui atteint Authentik via Caddy).
 # Hôte Docker NON joint au domaine AD : aucune résolution DNS automatique vers
-# la zone vaultwardensso.local. Vaultwarden résout vault.* ET auth.* en interne
-# vers le conteneur Caddy via l'alias réseau ci-dessous.
+# votre zone AD. Vaultwarden résout VAULT_HOSTNAME ET AUTH_HOSTNAME (définis
+# dans .env, cf. .env.example — mêmes valeurs que deploy/environment.env) en
+# interne vers le conteneur Caddy via l'alias réseau ci-dessous.
 # -----------------------------------------------------------------------------
 # Architecture réseau :
 #   - frontend           : Caddy <-> extérieur (443/80)
 #   - backend             : internal=true -> Vaultwarden joignable UNIQUEMENT via Caddy ;
-#                            Caddy y porte aussi les alias vault.*/auth.vaultwardensso.local
+#                            Caddy y porte aussi les alias VAULT_HOSTNAME/AUTH_HOSTNAME
 #   - authentik_proxy     : internal=true -> UNIQUEMENT Caddy <-> authentik-server
 #                            (Vaultwarden et le reste d'Authentik n'y ont pas acces)
 #   - authentik_internal  : internal=true -> authentik-server/worker <-> postgresql/redis
@@ -36,7 +37,7 @@ services:
     container_name: vaultwarden
     restart: unless-stopped
     environment:
-      DOMAIN: "https://vault.vaultwardensso.local/"
+      DOMAIN: "https://${VAULT_HOSTNAME:?VAULT_HOSTNAME requis dans .env}/"
       SIGNUPS_ALLOWED: "false"
       ADMIN_TOKEN: "${VW_ADMIN_TOKEN}"          # depuis .env
       # --- SSO OIDC (Authentik, via Caddy) — noms de variables vérifiés contre SSO.md du fork au moment de la rédaction ---
@@ -80,6 +81,9 @@ services:
     image: caddy:2-alpine
     container_name: caddy
     restart: unless-stopped
+    environment:
+      VAULT_HOSTNAME: "${VAULT_HOSTNAME:?VAULT_HOSTNAME requis dans .env}"   # lu par le Caddyfile via {$VAULT_HOSTNAME}
+      AUTH_HOSTNAME: "${AUTH_HOSTNAME:?AUTH_HOSTNAME requis dans .env}"      # lu par le Caddyfile via {$AUTH_HOSTNAME}
     ports:
       - "443:443"
       - "443:443/udp"                # HTTP/3
@@ -94,8 +98,8 @@ services:
       frontend: {}
       backend:
         aliases:
-          - vault.vaultwardensso.local   # resolution interne sans dependance DNS (hote non domain-joined)
-          - auth.vaultwardensso.local    # idem : Vaultwarden atteint Authentik EN PASSANT PAR Caddy
+          - ${VAULT_HOSTNAME:?VAULT_HOSTNAME requis dans .env}   # resolution interne sans dependance DNS (hote non domain-joined)
+          - ${AUTH_HOSTNAME:?AUTH_HOSTNAME requis dans .env}     # idem : Vaultwarden atteint Authentik EN PASSANT PAR Caddy
       authentik_proxy: {}               # seul chemin de Caddy vers authentik-server (nom de service Docker)
     security_opt:
       - "no-new-privileges:true"
