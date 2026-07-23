@@ -66,7 +66,7 @@ runbook/
 
 - **PKI/TLS** : confiance ajoutée à la CA interne (jamais `--insecure`/`tls internal` en cible), version d'image épinglée.
 - **IAM (Phase 2)** : compte de service Kerberos moindre privilège — `Domain Users` seul, `AccountNotDelegated`, AES only (jamais RC4/DES), refus de logon interactif porté par GPO sur un groupe dédié.
-- **IAM (Phase 3)** : provisioning des comptes = monopole de la source LDAP (`OU=Vaultwarden`) ; la source Kerberos est en `user_matching_mode=username_deny` et ne crée jamais de compte.
+- **IAM (Phase 3)** : provisioning des comptes = monopole de la source LDAP (`OU=Vaultwarden`) ; la source Kerberos est en `user_matching_mode=username_link` (relie au compte LDAP existant par username) avec `sync_users=false`, qui à lui seul garantit qu'elle ne crée jamais de compte.
 - **Secrets** : mot de passe du compte de service et keytab jamais affichés/loggés ; keytab traité comme un secret sensible (équivalent au mot de passe du compte), transfert exclusivement via `smbclient` (jamais RDP clipboard), intégrité vérifiée par SHA-256 des deux côtés, suppression du DC après transfert.
 - **Moindre privilège navigateurs (Phase 4)** : allowlist stricte à un seul FQDN (jamais de wildcard `*.local`), `AuthNegotiateDelegateAllowlist` volontairement non configuré (pas de délégation Kerberos).
 - **TDE (Phase 5)** : master password saisi une seule fois par device ; compensations obligatoires (BitLocker, verrouillage de session, break-glass hors organization SSO) détaillées dans `docs/02_risk_analysis_tde.md`. MFA Authentik identifié comme dette prioritaire — le SPNEGO ne doit pas devenir un contournement.

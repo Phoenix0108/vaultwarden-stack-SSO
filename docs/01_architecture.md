@@ -66,7 +66,7 @@ sequenceDiagram
     A-->>N: redirect code (aucun formulaire affiché)
     N->>V: /identity/connect/oidc-signin?code=...
     V->>A: POST /token (back-channel, PKCE + secret)
-    A-->>V: id_token (email, groups) — appariement username_deny sur source LDAP existante
+    A-->>V: id_token (email, groups) — appariement username_link sur source LDAP existante
     V->>V: Device Key locale déjà approuvée -> déchiffrement sans master password
     V-->>N: Coffre déverrouillé
 ```

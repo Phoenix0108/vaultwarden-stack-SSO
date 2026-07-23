@@ -286,7 +286,7 @@ base64 -w0 authentik.keytab > authentik.keytab.b64
 
 ### 🖱️ Upload du keytab — action GUI (secret, jamais scriptable vers un tiers)
 
-Coller le contenu de `authentik.keytab.b64` dans Directory → Federation & Social login → *Kerberos SPNEGO SSO* → champ Keytab. Puis confirmer dans l'UI : `spnego_server_name` vide (volontaire, cf. `deploy/authentik/README.md` §5), `user_matching_mode = username_deny`, `sync_users = false`.
+Coller le contenu de `authentik.keytab.b64` dans Directory → Federation & Social login → *Kerberos SPNEGO SSO* → champ Keytab. Puis confirmer dans l'UI : `spnego_server_name` vide (volontaire, cf. `deploy/authentik/README.md` §5), `user_matching_mode = username_link` (relie au compte LDAP existant, ne crée jamais — `sync_users = false` l'interdit de toute façon), `sync_users = false`.
 
 ### 🟢 DEBIAN — purge
 
