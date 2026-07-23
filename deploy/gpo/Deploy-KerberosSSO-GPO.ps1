@@ -21,9 +21,10 @@
     vers $VaultBaseUrl/#/sso?identifier=... : ce lien declenche l'auto-submit
     cote client (sso.component.ts, bitwarden/clients) et court-circuite les
     ecrans email + identifiant SSO du web-vault -- poste du domaine = SPNEGO
-    immediat au clic, aucune saisie. Le serveur OIDCWarden/Vaultwarden est
-    mono-instance/mono-IdP : /connect/authorize ne valide aucun identifiant
-    d'organisation, la valeur du parametre "identifier" est donc arbitraire.
+    immediat au clic, aucune saisie. La valeur du parametre "identifier" DOIT
+    rester l'identifiant magique '00000000-01DC-01DC-01DC-000000000000' --
+    voir le commentaire sur $SsoIdentifier ci-dessous, piege deja rencontre
+    avec une valeur lisible qui casse l'enrollment TDE en aval.
     Le formulaire email/mot de passe classique reste intact et accessible
     (poste hors domaine, break-glass) -- ce signet est un raccourci, pas une
     restriction serveur (SSO_ONLY reste sous le controle du gate Phase 5.7).
@@ -52,11 +53,20 @@ param(
     [string] $VaultBaseUrl = 'https://vault.vaultwardensso.local',
     [string] $BitwardenChromeExtId = 'nngceckbapebfimnlniiiahkandclblb',   # meme ID Chrome et Edge (store Chromium)
     [string] $BitwardenFirefoxExtId = '{446900e4-71c2-419f-a6a7-df9c091e268b}',
-    # Valeur libre : le serveur (OIDCWarden/Vaultwarden) est mono-instance/mono-IdP,
-    # /connect/authorize ne valide aucun identifiant d'organisation cote serveur.
-    # Cette valeur ne sert qu'a satisfaire la validation du formulaire Angular du
-    # web-vault avant l'auto-submit (cf. sso.component.ts, bitwarden/clients).
-    [string] $SsoIdentifier = 'vaultwardensso'
+    # NE PAS CHANGER cette valeur pour un texte lisible (piege deja rencontre : une
+    # valeur arbitraire comme "vaultwardensso" satisfait bien /connect/authorize
+    # -- mono-instance/mono-IdP, aucune validation server-side a ce stade -- MAIS
+    # casse l'etape suivante de l'enrollment TDE. OIDCWarden expose une route
+    # dediee, sans garde d'appartenance a l'organisation, UNIQUEMENT sur cet
+    # identifiant magique exact :
+    #   GET /organizations/00000000-01DC-01DC-01DC-000000000000/policies/master-password
+    # (cf. src/api/core/organizations.rs, get_dummy_master_password_policy, rank=1).
+    # Avec toute autre valeur, cette requete tombe sur la route generique (rank=2)
+    # qui exige une adhesion CONFIRMEE a l'organisation -- or au moment de cet appel
+    # l'utilisateur est seulement invite (pending), pas confirme : 401 "Error
+    # getting the organization id", ecran de creation du mot de passe principal qui
+    # ne se charge jamais. Confirme en lab.
+    [string] $SsoIdentifier = '00000000-01DC-01DC-01DC-000000000000'
 )
 # Lien direct qui court-circuite l'ecran email + l'ecran "identifiant d'organisation"
 # du web-vault : sso.component.ts declenche un submit() automatique des le ngOnInit

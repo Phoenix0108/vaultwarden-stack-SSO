@@ -6,7 +6,7 @@
     "Bookmarks": [
       {
         "Title": "Vaultwarden (SSO)",
-        "URL": "https://vault.vaultwardensso.local/#/sso?identifier=vaultwardensso",
+        "URL": "https://vault.vaultwardensso.local/#/sso?identifier=00000000-01DC-01DC-01DC-000000000000",
         "Placement": "toolbar",
         "Folder": "Vaultwarden"
       }
