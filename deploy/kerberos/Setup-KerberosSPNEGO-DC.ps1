@@ -143,7 +143,13 @@ $ktpassArgs = @(
     '-princ', $Principal,
     '-mapuser', "$Domain\$ServiceAccountName",
     '-crypto', 'AES256-SHA1',
-    '-ptype', 'KRB5_NT_PRINCIPAL',
+    # KRB5_NT_SRV_HST (pas KRB5_NT_PRINCIPAL) : confirme en lab par lecture du code
+    # source Authentik (authentik/sources/kerberos/models.py) -- la recherche de
+    # l'entree keytab cote serveur se fait avec gssapi NameType.hostbased_service
+    # (= KRB5_NT_SRV_HST cote MIT krb5). Un keytab genere en KRB5_NT_PRINCIPAL est
+    # rejete avec "No key table entry found" meme si le principal textuel est
+    # identique -- le name_type fait partie de la cle de recherche.
+    '-ptype', 'KRB5_NT_SRV_HST',
     '-pass', $plainPassword,
     '-out', $KeytabPath
 )
