@@ -45,6 +45,7 @@ Mécanique (vérifiée directement dans le code source Authentik, après plusieu
    - `spnego_server_name` **vide** (volontaire — voir commentaire dans le blueprint : renseigner ce champ fait échouer systématiquement l'acquisition des credentials dans cet environnement, bug/limitation de cette fonctionnalité encore en préversion ; laisser vide fait fonctionner l'auto-détection depuis le keytab, sans ambiguïté puisqu'il n'y a qu'une seule entrée)
    - `user_matching_mode = username_link` (**pas** `username_deny` — contrairement à l'intuition, "deny" signifie ici *refuse de relier* à un compte existant, l'inverse de ce que ce projet veut ; `username_link` relie au compte déjà provisionné par la source LDAP sans jamais en créer un nouveau, garantie déjà assurée indépendamment par `sync_users = false`)
    - `sync_users = false` (le provisioning reste le monopole de la source LDAP `OU=Vaultwarden`)
+   - `authentication_flow = default-source-authentication` (sinon `Bad Request: Le flux configuré n'existe pas` après un SPNEGO pourtant accepté)
 
 ## 2. Ne pas supprimer le stage password
 
