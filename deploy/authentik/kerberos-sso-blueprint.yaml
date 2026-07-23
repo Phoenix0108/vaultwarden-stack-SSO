@@ -86,7 +86,13 @@ entries:
       password_login_update_internal_password: false
       sync_users: false              # provisioning = monopole de la source LDAP existante (OU=Vaultwarden)
       sync_users_password: false
-      user_matching_mode: "username_deny"   # apparie sur username/sAMAccountName ; DENY si inconnu -> jamais de creation
+      # username_link (PAS username_deny) : relie au compte existant par username --
+      # confirme en lab que "deny" signifie "refuse de RELIER" (deny enrollment when
+      # username already exists), l'inverse de l'intention initiale de ce projet.
+      # sync_users=false empeche toute creation de compte quel que soit le mode --
+      # username_link reste donc sans danger : jamais de nouveau compte, uniquement
+      # une liaison vers un compte deja provisionne par la source LDAP.
+      user_matching_mode: "username_link"
       user_path_template: "goauthentik.io/sources/%(slug)s"
 
   # ---------------------------------------------------------------------------
