@@ -52,11 +52,20 @@ entries:
       # royaume explicite. dns_lookup_* a false : le DNS du host Docker (non domain-joint)
       # ne resout pas les enregistrements SRV Kerberos, autant s'appuyer uniquement sur
       # les entrees statiques ci-dessous plutot que de risquer un echec de resolution.
+      # rdns/dns_canonicalize_hostname a false : MIT krb5 tente par defaut de
+      # canonicaliser le nom d'hote du service (spnego_server_name) via DNS avant
+      # de chercher l'entree keytab -- authentik-server n'a aucune raison de savoir
+      # resoudre auth.vaultwardensso.local (alias reseau propre a Caddy, sur un
+      # reseau Docker dont authentik-server ne fait pas partie), donc cette
+      # canonicalisation echoue ou part de travers et peut a elle seule expliquer
+      # un "No key table entry found" meme avec un keytab et un royaume corrects.
       krb5_conf: |
         [libdefaults]
             default_realm = VAULTWARDENSSO.LOCAL
             dns_lookup_realm = false
             dns_lookup_kdc = false
+            rdns = false
+            dns_canonicalize_hostname = false
         [realms]
             VAULTWARDENSSO.LOCAL = {
                 kdc = 192.168.100.76
