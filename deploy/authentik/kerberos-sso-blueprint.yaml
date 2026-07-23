@@ -46,12 +46,17 @@ entries:
       expression: |
         # Redirige vers la source Kerberos si le client est sur le LAN intranet.
         # <CLIENT_SUBNET> = CIDR reel a substituer avant import (ex: 192.168.100.0/24).
+        # Tout le corps est dans un seul try/except : une erreur ICI (placeholder
+        # non substitue, CIDR invalide, etc.) ne doit JAMAIS bloquer le flow de
+        # connexion entier (deja vecu : "<CLIENT_SUBNET>" non remplace a fait
+        # echouer l'identification pour tout le monde, mot de passe inclus,
+        # au lieu de degrader proprement vers le formulaire) -- on degrade
+        # toujours vers le comportement normal (return True) en cas de doute.
         import ipaddress
 
-        client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
-        remote_ip = request.http_request.META.get("REMOTE_ADDR", "")
-
         try:
+            client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
+            remote_ip = request.http_request.META.get("REMOTE_ADDR", "")
             in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
         except ValueError:
             in_subnet = False
