@@ -29,10 +29,12 @@ Contrairement à ce que ce document a longtemps supposé implicitement, cette so
 
 ## 1. Import du blueprint (source Kerberos SPNEGO)
 
-`kerberos-sso-blueprint.yaml` couvre la création de la source Kerberos, la policy de redirection et son binding sur le stage d'identification — **sauf le keytab** (secret binaire, jamais dans un fichier versionné).
+`kerberos-sso-blueprint.yaml` couvre la création de la source Kerberos, la policy de redirection, un **Redirect Stage** dédié (URL statique vers la source Kerberos) et son binding sur le flow d'authentification par défaut, avant le stage d'identification — **sauf le keytab** (secret binaire, jamais dans un fichier versionné).
+
+Mécanique (vérifiée directement dans le code source Authentik, après plusieurs échecs par simple lecture de doc) : il n'existe **pas** de fonction permettant à une Expression Policy de renvoyer une URL de redirection — une policy ne renvoie qu'un booléen. La redirection réelle passe donc par un Redirect Stage inséré *avant* le stage d'identification (order plus bas) ; la policy IP sert de gate sur ce Redirect Stage : hors `CLIENT_SUBNET`, le stage est simplement sauté et le flow continue normalement vers l'identification/formulaire password.
 
 1. Substituer `<CLIENT_SUBNET>` dans le blueprint par le CIDR réel du LAN intranet (ex. `192.168.100.0/24`) avant import.
-2. Vérifier le slug réel du flow d'authentification par défaut sur votre instance (Admin → Flows → celui marqué *default-authentication-flow*, et son stage d'identification) — remplacer les valeurs `default-authentication-flow` / `default-authentication-identification` dans le blueprint si votre installation utilise des noms différents (le nom exact peut varier selon la version/l'historique de l'instance).
+2. Vérifier le slug réel du flow d'authentification par défaut sur votre instance (Admin → Flows → celui marqué *default-authentication-flow*) et l'`order` de son stage d'identification (généralement `10`) — le blueprint insère le Redirect Stage à `order: 5` ; ajuster si votre installation diffère.
 3. Importer : Admin → System → Blueprints → Import, ou `ak import_blueprint deploy/authentik/kerberos-sso-blueprint.yaml` depuis le conteneur/hôte Authentik.
 4. **Upload manuel du keytab** (jamais transité par un service tiers) :
    ```
@@ -46,7 +48,7 @@ Contrairement à ce que ce document a longtemps supposé implicitement, cette so
 
 ## 2. Ne pas supprimer le stage password
 
-Le flow d'authentification par défaut garde son stage password (break-glass : poste hors domaine, mobile, échec SPNEGO). Seule la policy de redirection (`redirect-kerberos-if-intranet`) tente le SPNEGO en priorité pour les clients du `CLIENT_SUBNET` ; hors de ce subnet, la policy retourne `True` et le flow continue normalement vers le formulaire.
+Le flow d'authentification par défaut garde son stage password (break-glass : poste hors domaine, mobile, échec SPNEGO). Seul le Redirect Stage (gaté par la policy `redirect-kerberos-if-intranet`) tente le SPNEGO en priorité pour les clients du `CLIENT_SUBNET` ; hors de ce subnet, la policy retourne `False`, le Redirect Stage est sauté et le flow continue normalement vers le formulaire.
 
 ## 3. Durcissement session (à vérifier manuellement, hors blueprint)
 
@@ -58,7 +60,7 @@ Le flow d'authentification par défaut garde son stage password (break-glass : p
 
 **a. Poste du domaine, session ouverte — negotiate direct sur l'endpoint source :**
 ```
-curl --negotiate -u : https://auth.vaultwardensso.local/source/kerberos/kerberos-sso/login/
+curl --negotiate -u : https://auth.vaultwardensso.local/source/kerberos/kerberos-sso/
 ```
 Attendu : `302` (redirection vers le flow, PAS un `401` final).
 

@@ -298,7 +298,7 @@ shred -u authentik.keytab.b64
 
 🟠 :
 ```bash
-curl --negotiate -u : https://auth.vaultwardensso.local/source/kerberos/kerberos-sso/login/
+curl --negotiate -u : https://auth.vaultwardensso.local/source/kerberos/kerberos-sso/
 # attendu : 302 (pas 401 final)
 ```
 

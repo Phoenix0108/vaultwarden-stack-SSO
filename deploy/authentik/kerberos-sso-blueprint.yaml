@@ -7,6 +7,23 @@
 # action manuelle post-import (cf. deploy/authentik/README.md, etape 1).
 # Placeholders a substituer AVANT import : <KERBEROS_SOURCE_SLUG> peut rester
 # tel quel, <CLIENT_SUBNET> DOIT etre remplace par le CIDR reel du LAN client.
+# -----------------------------------------------------------------------------
+# Mecanique de redirection (verifiee contre le code source authentik, apres
+# plusieurs tentatives infructueuses par simple lecture de doc) :
+#  - Il n'existe PAS de fonction "ak_create_flow_link_url" dans l'evaluateur
+#    d'expressions Authentik (authentik/lib/expression/evaluator.py et
+#    authentik/policies/expression/evaluator.py, verifies directement) --
+#    une Expression Policy ne peut renvoyer qu'un booleen (PolicyResult.passing),
+#    jamais une URL de redirection.
+#  - La redirection reelle passe par un Redirect Stage (authentik_stages_redirect
+#    .redirectstage, mode "static") insere AVANT le stage d'identification
+#    (order plus bas), avec la policy IP en gate sur CE stage : hors subnet,
+#    le stage de redirection est simplement saute (policy=False) et le flow
+#    continue normalement vers l'identification/formulaire password.
+#  - URL de la Source Kerberos verifiee dans authentik/sources/kerberos/urls.py
+#    (pattern "<slug>/") + apps.py (mountpoint "source/kerberos/") :
+#    /source/kerberos/<slug>/ -- PAS de suffixe /login/, ce n'est ni
+#    "oauth-client-login" ni un nom invente.
 # =============================================================================
 version: 1
 metadata:
@@ -34,9 +51,9 @@ entries:
       user_path_template: "goauthentik.io/sources/%(slug)s"
 
   # ---------------------------------------------------------------------------
-  # 2. Expression Policy : redirige vers la source Kerberos UNIQUEMENT si la
-  #    requete vient du CLIENT_SUBNET intranet. Hors subnet -> fallback
-  #    formulaire mot de passe (le stage password du flow n'est pas supprime).
+  # 2. Expression Policy : simple gate booleen (True = client intranet). Ne
+  #    fait plus que ca -- la redirection elle-meme est geree par le Redirect
+  #    Stage ci-dessous, pas par cette policy.
   # ---------------------------------------------------------------------------
   - model: authentik_policies_expression.expressionpolicy
     id: kerberos-redirect-policy
@@ -44,14 +61,14 @@ entries:
       name: "redirect-kerberos-if-intranet"
     attrs:
       expression: |
-        # Redirige vers la source Kerberos si le client est sur le LAN intranet.
+        # Renvoie True uniquement si le client semble venir du LAN intranet.
         # <CLIENT_SUBNET> = CIDR reel a substituer avant import (ex: 192.168.100.0/24).
         # Tout le corps est dans un seul try/except : une erreur ICI (placeholder
         # non substitue, CIDR invalide, etc.) ne doit JAMAIS bloquer le flow de
-        # connexion entier (deja vecu : "<CLIENT_SUBNET>" non remplace a fait
-        # echouer l'identification pour tout le monde, mot de passe inclus,
-        # au lieu de degrader proprement vers le formulaire) -- on degrade
-        # toujours vers le comportement normal (return True) en cas de doute.
+        # connexion (deja vecu : une erreur non catchee ici a fait echouer
+        # l'identification pour tout le monde, mot de passe inclus) -- on
+        # degrade toujours vers False (le stage de redirection est simplement
+        # saute, le flow continue normalement).
         # REMOTE_ADDR n'est PAS fiable ici (confirme en lab : toujours None) --
         # tout passe par Caddy (reverse proxy interne), donc c'est X-Forwarded-For
         # qu'il faut lire. Caddy ecrase toujours cet en-tete avec la vraie IP TCP
@@ -69,31 +86,45 @@ entries:
         except ValueError:
             in_subnet = False
 
-        if in_subnet:
-            return ak_create_flow_link_url(
-                "authentik_sources_kerberos:oauth-client-login",
-                kwargs={"source_slug": "kerberos-sso"},
-            )
-        return True
+        return in_subnet
 
   # ---------------------------------------------------------------------------
-  # 3. Binding de la policy sur le stage d'identification du flow par defaut.
-  #    order bas = evaluee tot. Le flow/slug par defaut peut varier selon
-  #    l'installation : verifier le slug reel avant import (Flows > Identification).
+  # 3. Redirect Stage : URL statique vers la Source Kerberos. Le slug est connu
+  #    au moment du blueprint (kerberos-sso, identifiers.slug ci-dessus) donc
+  #    l'URL est fixe, pas besoin de la calculer dynamiquement.
+  # ---------------------------------------------------------------------------
+  - model: authentik_stages_redirect.redirectstage
+    id: kerberos-redirect-stage
+    identifiers:
+      name: "kerberos-auto-redirect"
+    attrs:
+      mode: "static"
+      target_static: "/source/kerberos/kerberos-sso/"
+      keep_context: false
+
+  # ---------------------------------------------------------------------------
+  # 4. Binding du Redirect Stage sur le flow par defaut, AVANT le stage
+  #    d'identification existant (order plus bas -- celui-ci est generalement
+  #    a 10, verifier avant import si votre installation differe). evaluate_on_plan
+  #    force l'evaluation de la policy des la planification du flow, avant meme
+  #    l'affichage du premier stage -- essentiel pour un redirect "silencieux"
+  #    (sinon l'identification pourrait s'afficher brievement avant la redirection).
   # ---------------------------------------------------------------------------
   - model: authentik_flows.flowstagebinding
-    id: identification-stage-binding
+    id: kerberos-redirect-stage-binding
     identifiers:
       target: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
-      stage: !Find [authentik_stages_identification.identificationstage, [name, default-authentication-identification]]
-      order: 10
+      stage: !KeyOf kerberos-redirect-stage
+      order: 5
     attrs:
       policy_engine_mode: "any"
+      evaluate_on_plan: true
+      re_evaluate_policies: true
 
   - model: authentik_policies.policybinding
-    id: kerberos-redirect-binding
+    id: kerberos-redirect-policy-binding
     identifiers:
-      target: !KeyOf identification-stage-binding
+      target: !KeyOf kerberos-redirect-stage-binding
       policy: !KeyOf kerberos-redirect-policy
       order: 0
     attrs:
