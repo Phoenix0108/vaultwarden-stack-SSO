@@ -52,11 +52,19 @@ entries:
         # echouer l'identification pour tout le monde, mot de passe inclus,
         # au lieu de degrader proprement vers le formulaire) -- on degrade
         # toujours vers le comportement normal (return True) en cas de doute.
+        # REMOTE_ADDR n'est PAS fiable ici (confirme en lab : toujours None) --
+        # tout passe par Caddy (reverse proxy interne), donc c'est X-Forwarded-For
+        # qu'il faut lire. Caddy ecrase toujours cet en-tete avec la vraie IP TCP
+        # du client (reverse_proxy ne relaie jamais un X-Forwarded-For fourni par
+        # le client lui-meme) : safe a lire directement, pas de risque de spoof
+        # tant qu'authentik-server n'est joignable que via Caddy (authentik_proxy,
+        # internal=true).
         import ipaddress
 
         try:
             client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
-            remote_ip = request.http_request.META.get("REMOTE_ADDR", "")
+            xff = request.http_request.META.get("HTTP_X_FORWARDED_FOR", "")
+            remote_ip = xff.split(",")[0].strip() if xff else request.http_request.META.get("REMOTE_ADDR", "")
             in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
         except ValueError:
             in_subnet = False
