@@ -42,23 +42,32 @@ entries:
       name: "Kerberos SPNEGO SSO"
       enabled: true
       realm: "VAULTWARDENSSO.LOCAL"
-      spnego_server_name: "HTTP/auth.vaultwardensso.local"
+      # spnego_server_name VOLONTAIREMENT VIDE -- ne pas renseigner "HTTP/auth.vaultwardensso.local"
+      # ici. Diagnostic complet en lab (via ak shell, cf. historique de commits) : le code
+      # d'Authentik (get_gssapi_creds) construit un gssapi.names.Name(..., name_type=
+      # NameType.hostbased_service) des que ce champ est renseigne, et CETTE construction
+      # specifique echoue systematiquement a trouver l'entree du keytab dans cet environnement
+      # ("No key table entry found matching HTTP/auth.../@"), meme avec un keytab prouve
+      # byte-a-byte correct (bon principal, bon realm, bon kvno, bon enctype, bon name_type
+      # KRB5_NT_SRV_HST). Teste et confirme : la MEME acquisition de credentials reussit
+      # parfaitement (retourne HTTP/auth.vaultwardensso.local@VAULTWARDENSSO.LOCAL) des que le
+      # name est soit un principal complet explicite (name_type=kerberos_principal), soit --
+      # cas qui nous interesse ici -- name=None, laissant gssapi essayer directement les
+      # entrees du keytab. La doc officielle Authentik confirme ce comportement : "If not
+      # specified, the server name defaults to trying out all entries in the keytab/credentials
+      # cache until a valid server name is found." Notre keytab n'ayant qu'une seule entree,
+      # cette auto-detection est sans ambiguite. Root cause probable : bug/incompatibilite de
+      # cette fonctionnalite encore marquee "in preview" dans l'UI Authentik au moment de la
+      # redaction -- a revalider sur une version ulterieure d'Authentik avant de retenter de
+      # renseigner ce champ explicitement.
+      spnego_server_name: ""
       spnego_keytab: ""              # a renseigner manuellement (base64), jamais en clair dans ce fichier
-      # krb5_conf vide = "config systeme par defaut" (doc officielle), qui n'a AUCUN
-      # default_realm dans un conteneur Authentik generique. Confirme en lab : sans ce
-      # bloc, la recherche de l'entree keytab se fait avec un royaume vide au lieu de
-      # VAULTWARDENSSO.LOCAL -> "No key table entry found matching HTTP/auth.../@"
-      # (royaume vide apres le @) alors que le keytab contient bien l'entree avec le
-      # royaume explicite. dns_lookup_* a false : le DNS du host Docker (non domain-joint)
-      # ne resout pas les enregistrements SRV Kerberos, autant s'appuyer uniquement sur
-      # les entrees statiques ci-dessous plutot que de risquer un echec de resolution.
-      # rdns/dns_canonicalize_hostname a false : MIT krb5 tente par defaut de
-      # canonicaliser le nom d'hote du service (spnego_server_name) via DNS avant
-      # de chercher l'entree keytab -- authentik-server n'a aucune raison de savoir
-      # resoudre auth.vaultwardensso.local (alias reseau propre a Caddy, sur un
-      # reseau Docker dont authentik-server ne fait pas partie), donc cette
-      # canonicalisation echoue ou part de travers et peut a elle seule expliquer
-      # un "No key table entry found" meme avec un keytab et un royaume corrects.
+      # krb5_conf : realme/KDC explicites plutot que la config systeme par defaut (qui n'a
+      # aucun default_realm dans un conteneur Authentik generique). N'est plus la cause du
+      # probleme decrit ci-dessus (isole et corrige via spnego_server_name), mais reste une
+      # bonne pratique : dns_lookup_* et rdns/dns_canonicalize_hostname a false car le host
+      # Docker (non domain-joint) ne resout pas les enregistrements DNS de la zone AD --
+      # autant s'appuyer uniquement sur les entrees statiques ci-dessous.
       krb5_conf: |
         [libdefaults]
             default_realm = VAULTWARDENSSO.LOCAL
