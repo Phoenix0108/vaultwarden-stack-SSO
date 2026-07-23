@@ -100,11 +100,26 @@ entries:
       name: "redirect-kerberos-if-intranet"
     attrs:
       expression: |
-        # Renvoie True uniquement si le client semble venir du LAN intranet.
+        # Renvoie True uniquement si (a) le client semble venir du LAN intranet ET
+        # (b) la connexion est pilotee par une application OAuth2 (Vaultwarden),
+        # pas un acces direct a l'interface Authentik.
         # <CLIENT_SUBNET> = CIDR reel a substituer avant import (ex: 192.168.100.0/24).
+        #
+        # INCIDENT VECU : cette policy est bindee sur default-authentication-flow,
+        # qui est PARTAGE par TOUS les logins Authentik -- y compris akadmin et
+        # l'acces direct a /if/admin/. Sans le filtre (b) ci-dessous, un
+        # administrateur sur le LAN se faisait rediriger vers la source Kerberos
+        # comme n'importe quel utilisateur Vaultwarden, avec echec puisque
+        # akadmin n'est pas un compte AD -- verrouillage total de l'admin, corrige
+        # en urgence en supprimant le stage/binding en base (ak shell). Le filtre
+        # (b) distingue les deux cas via la presence de client_id/response_type
+        # dans l'URL : uniquement present quand un Provider OAuth2 (Vaultwarden)
+        # redirige vers /if/flow/.../?response_type=code&client_id=..., jamais
+        # pour une visite directe de /if/admin/ ou de la page de login generique.
+        #
         # Tout le corps est dans un seul try/except : une erreur ICI (placeholder
         # non substitue, CIDR invalide, etc.) ne doit JAMAIS bloquer le flow de
-        # connexion (deja vecu : une erreur non catchee ici a fait echouer
+        # connexion (deja vecu : une erreur non catchee a fait echouer
         # l'identification pour tout le monde, mot de passe inclus) -- on
         # degrade toujours vers False (le stage de redirection est simplement
         # saute, le flow continue normalement).
@@ -122,10 +137,13 @@ entries:
             xff = request.http_request.META.get("HTTP_X_FORWARDED_FOR", "")
             remote_ip = xff.split(",")[0].strip() if xff else request.http_request.META.get("REMOTE_ADDR", "")
             in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
+
+            is_app_driven_login = bool(request.http_request.GET.get("client_id"))
         except ValueError:
             in_subnet = False
+            is_app_driven_login = False
 
-        return in_subnet
+        return in_subnet and is_app_driven_login
 
   # ---------------------------------------------------------------------------
   # 3. Redirect Stage : URL statique vers la Source Kerberos. Le slug est connu

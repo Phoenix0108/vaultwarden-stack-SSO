@@ -73,6 +73,9 @@ Le formulaire mot de passe Authentik s'affiche (fallback fonctionnel — confirm
 **d. Logs Authentik :**
 Admin → Events → un événement `login` portant la source `kerberos-sso`, **sans** trace de traversée du stage password pour ce même login.
 
+**e. Accès admin direct, depuis le LAN intranet :**
+Depuis un poste du `CLIENT_SUBNET`, accéder à `https://auth.vaultwardensso.local/if/admin/` et se connecter avec `akadmin` (ou tout compte local Authentik) → le formulaire email/mot de passe standard doit s'afficher, **sans redirection Kerberos**. Ce gate existe suite à un incident réel : la policy de redirection est bindée sur `default-authentication-flow`, partagé par tous les logins Authentik — sans le filtre `client_id` (présent uniquement lors d'une connexion pilotée par une application OAuth2 comme Vaultwarden), un admin sur le LAN se faisait rediriger comme n'importe quel utilisateur Vaultwarden, avec échec puisque `akadmin` n'est pas un compte AD → verrouillage total de l'admin.
+
 ## Supervision (à consigner dans le SIEM, Phase 6)
 
 - SPNEGO exposé uniquement sur le périmètre intranet : le firewall inbound du flux client → Authentik reste scopé `CLIENT_SUBNET` (vérifier au niveau réseau, hors Authentik).
