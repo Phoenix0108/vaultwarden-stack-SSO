@@ -41,6 +41,13 @@ entries:
     attrs:
       name: "Kerberos SPNEGO SSO"
       enabled: true
+      # Flow declenche apres une authentification SPNEGO reussie pour finaliser la
+      # connexion (etablir la session). Jamais renseigne dans les versions precedentes
+      # de ce blueprint -- reste a null par defaut, d'ou "Bad Request: Le flux configure
+      # n'existe pas" confirme en lab juste apres un login SPNEGO pourtant accepte.
+      # default-source-authentication = flow standard livre par defaut avec Authentik
+      # pour ce role (authentification d'un utilisateur existant via une source).
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
       realm: "VAULTWARDENSSO.LOCAL"
       # spnego_server_name VOLONTAIREMENT VIDE -- ne pas renseigner "HTTP/auth.vaultwardensso.local"
       # ici. Diagnostic complet en lab (via ak shell, cf. historique de commits) : le code
