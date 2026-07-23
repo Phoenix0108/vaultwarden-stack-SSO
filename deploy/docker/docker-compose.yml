@@ -168,6 +168,13 @@ services:
       AUTHENTIK_POSTGRESQL__PASSWORD: "${PG_PASS:?PG_PASS requis dans .env}"
       AUTHENTIK_SECRET_KEY: "${AUTHENTIK_SECRET_KEY:?AUTHENTIK_SECRET_KEY requis dans .env}"
       AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      # Caddy est le seul point d'entree (tout passe par Caddy) : sans ceci, Authentik voit
+      # l'IP du conteneur Caddy sur le reseau authentik_proxy comme REMOTE_ADDR au lieu de
+      # l'IP reelle du client transmise via X-Forwarded-For -- la policy de redirection
+      # Kerberos (redirect-kerberos-if-intranet, Phase 3) ne peut alors jamais matcher
+      # CLIENT_SUBNET. Plage large mais sans risque : ces reseaux sont deja internal=true,
+      # aucun acteur externe ne peut se faire passer pour Caddy dessus.
+      AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS: "172.16.0.0/12,127.0.0.0/8,::1/128"
       # Pas de config SMTP : hors perimetre (pas de notifications email requises ici).
     volumes:
       - authentik-media:/media
