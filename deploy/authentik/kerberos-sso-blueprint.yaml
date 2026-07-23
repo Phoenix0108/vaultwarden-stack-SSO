@@ -116,6 +116,15 @@ entries:
         # dans l'URL : uniquement present quand un Provider OAuth2 (Vaultwarden)
         # redirige vers /if/flow/.../?response_type=code&client_id=..., jamais
         # pour une visite directe de /if/admin/ ou de la page de login generique.
+        # ATTENTION : au moment ou cette policy s'evalue (stage de redirection,
+        # avant identification), Authentik a deja reecrit la requete et englobe
+        # la query string d'origine ENTIERE dans un unique parametre nomme
+        # "query" (ex: ?query=response_type%3Dcode%26client_id%3D...) -- confirme
+        # en lab par un print de debug. client_id n'est donc JAMAIS trouvable
+        # directement dans request.http_request.GET a ce stade ; il faut le
+        # decoder depuis l'interieur de ce parametre "query" imbrique. On garde
+        # aussi la lecture directe en repli, au cas ou une version d'Authentik
+        # future cesse d'envelopper ainsi la requete.
         #
         # Tout le corps est dans un seul try/except : une erreur ICI (placeholder
         # non substitue, CIDR invalide, etc.) ne doit JAMAIS bloquer le flow de
@@ -131,6 +140,7 @@ entries:
         # tant qu'authentik-server n'est joignable que via Caddy (authentik_proxy,
         # internal=true).
         import ipaddress
+        from urllib.parse import parse_qs
 
         try:
             client_subnet = ipaddress.ip_network("<CLIENT_SUBNET>")
@@ -138,7 +148,11 @@ entries:
             remote_ip = xff.split(",")[0].strip() if xff else request.http_request.META.get("REMOTE_ADDR", "")
             in_subnet = ipaddress.ip_address(remote_ip) in client_subnet
 
-            is_app_driven_login = bool(request.http_request.GET.get("client_id"))
+            client_id = request.http_request.GET.get("client_id")
+            if not client_id:
+                nested_qs = request.http_request.GET.get("query", "")
+                client_id = parse_qs(nested_qs).get("client_id", [None])[0]
+            is_app_driven_login = bool(client_id)
         except ValueError:
             in_subnet = False
             is_app_driven_login = False
