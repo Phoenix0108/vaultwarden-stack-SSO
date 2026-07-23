@@ -38,7 +38,7 @@
 [CmdletBinding()]
 param(
     # Defauts lus depuis les variables d'environnement chargees par
-    # ". .\deploy\Set-Environment.ps1" (deploy\environment.env) -- passer les
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env) -- passer les
     # parametres explicitement pour surcharger ponctuellement.
     [string] $SpnHostname = $env:VAULT_HOSTNAME,
     [string] $AuthHostname = $env:AUTH_HOSTNAME,
@@ -56,7 +56,7 @@ function Fail($m){ Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
 
 foreach ($p in @('SpnHostname','AuthHostname','CaConfig','RootThumbprint')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
-        Fail "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\Set-Environment.ps1' (deploy\environment.env rempli)."
+        Fail "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
     }
 }
 
@@ -163,5 +163,5 @@ try {
 
 Write-Host ""
 Ok "Termine. Fichiers prets dans ${WorkDir} : $prefix.pfx, $prefix.pfxpass.txt, $prefix.cer, adcs-root.cer"
-Warn "Transferer ces 4 fichiers vers l'hote Docker (smbclient), puis executer deploy/tls/install-vault-cert.sh la-bas."
+Warn "Transferer ces 4 fichiers vers l'hote Docker (smbclient), puis executer deploy/01_tls/install-vault-cert.sh la-bas."
 Warn "Purger ensuite $prefix.pfx et $prefix.pfxpass.txt du DC (secrets) une fois le transfert confirme."

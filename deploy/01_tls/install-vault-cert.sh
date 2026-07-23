@@ -37,7 +37,7 @@
 #   SPN_HOSTNAME, AUTH_HOSTNAME, ROOT_THUMBPRINT
 # Toutes (sauf REPO_*/SMB_*) sont normalement absentes de l'environnement
 # appelant : ce script sourced automatiquement deploy/environment.env (copie
-# remplie de environment.env.example) des que le depot est disponible --
+# remplie de 00_environment.env.example) des que le depot est disponible --
 # DC_IP/AUTH_HOSTNAME viennent alors directement de ce fichier, SPN_HOSTNAME
 # de VAULT_HOSTNAME, ROOT_THUMBPRINT de CA_ROOT_THUMBPRINT, DC_USER de
 # DOMAIN_NETBIOS. Voir plus bas (etape 0b) -- passer une variable explicitement
@@ -82,7 +82,7 @@ command -v git >/dev/null || apt_install git
 
 # --- 0. Depot : detecter, ou cloner si absent ---------------------------------------
 if git -C . rev-parse --show-toplevel >/dev/null 2>&1 \
-        && [ -f "$(git rev-parse --show-toplevel)/deploy/tls/install-vault-cert.sh" ]; then
+        && [ -f "$(git rev-parse --show-toplevel)/deploy/01_tls/install-vault-cert.sh" ]; then
     REPO_ROOT="$(git rev-parse --show-toplevel)"
     info "Depot deja present : $REPO_ROOT"
 elif [ -d "$REPO_DIR/.git" ]; then
@@ -124,7 +124,7 @@ if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
     set +a
 else
-    warn "$ENV_FILE absent -- copier deploy/environment.env.example vers deploy/environment.env et le renseigner (evite de repasser DC_IP=... etc. en variables d'environnement a chaque execution)."
+    warn "$ENV_FILE absent -- copier deploy/00_environment.env.example vers deploy/environment.env et le renseigner (evite de repasser DC_IP=... etc. en variables d'environnement a chaque execution)."
 fi
 
 DC_IP="${DC_IP:-}"
@@ -137,14 +137,14 @@ fi
 DC_USER="${DC_USER:-}"
 
 for v in DC_IP DC_USER SPN_HOSTNAME AUTH_HOSTNAME ROOT_THUMBPRINT; do
-    [ -n "${!v}" ] || fail "$v manquant -- renseigner deploy/environment.env (copie de deploy/environment.env.example), ou passer $v=... explicitement en variable d'environnement."
+    [ -n "${!v}" ] || fail "$v manquant -- renseigner deploy/environment.env (copie de deploy/00_environment.env.example), ou passer $v=... explicitement en variable d'environnement."
 done
 [ "$ROOT_THUMBPRINT" != "CHANGE_ME_SHA1_THUMBPRINT" ] || fail "CA_ROOT_THUMBPRINT est encore au placeholder dans $ENV_FILE -- le renseigner avant de continuer."
 
 # Relais vers la copie du depot (a jour, avec tous les correctifs) si ce script
 # a ete lance en standalone avant que le depot n'existe -- evite d'executer une
 # copie perimee une fois le vrai depot disponible. Garde anti-boucle : _VAULT_CERT_REEXEC.
-CANONICAL="$REPO_ROOT/deploy/tls/install-vault-cert.sh"
+CANONICAL="$REPO_ROOT/deploy/01_tls/install-vault-cert.sh"
 if [ -z "${_VAULT_CERT_REEXEC:-}" ] && [ -f "$CANONICAL" ] \
         && [ "$(readlink -f "$0" 2>/dev/null || echo "$0")" != "$(readlink -f "$CANONICAL")" ]; then
     info "Relais vers la copie du depot : $CANONICAL"
@@ -244,14 +244,14 @@ ok "Cle privee extraite : vault.key"
 
 # --- 5. Assemblage et installation --------------------------------------------------
 cat vault-new.pem adcs-root.pem > vault.crt
-sudo install -o root -g root -m 644 vault.crt     deploy/caddy/certs/vault.crt
-sudo install -o root -g root -m 600 vault.key     deploy/caddy/certs/vault.key
-sudo install -o root -g root -m 644 adcs-root.pem deploy/docker/adcs-root.crt
+sudo install -o root -g root -m 644 vault.crt     deploy/02_caddy/certs/vault.crt
+sudo install -o root -g root -m 600 vault.key     deploy/02_caddy/certs/vault.key
+sudo install -o root -g root -m 644 adcs-root.pem deploy/03_docker/adcs-root.crt
 rm -f vault.crt vault.key
-ok "Chaine installee dans deploy/caddy/certs et deploy/docker"
+ok "Chaine installee dans deploy/02_caddy/certs et deploy/03_docker"
 
 # --- 6. Secrets applicatifs (.env, idempotent : jamais ecrase s'il existe) ---------
-cd deploy/docker
+cd deploy/03_docker
 if [ ! -f .env ]; then
     info "Creation de .env (nouveaux secrets generes, entropie suffisante)"
     cp .env.example .env
@@ -308,7 +308,7 @@ ensure_secret AUTHENTIK_SECRET_KEY "openssl rand -base64 60 | tr -d '\n'"
 # fallback master password sans validation explicite d'un login SSO reussi).
 ensure_secret VW_SSO_ONLY "echo false"
 
-mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (deploy/caddy/ est un sibling)
+mkdir -p vw-data ../02_caddy/logs   # deploy/02_caddy/logs, PAS deploy/03_docker/caddy/logs (deploy/02_caddy/ est un sibling)
 
 # --- 7. Resolution locale (hote non domain-joined, idempotent) ---------------------
 for h in "$SPN_HOSTNAME" "$AUTH_HOSTNAME"; do

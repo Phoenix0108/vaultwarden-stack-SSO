@@ -6,14 +6,14 @@
 # complete (leaf + intermediaires eventuels) dans vault.crt, cle privee dans
 # vault.key. Le certificat DOIT porter un SAN pour VAULT_HOSTNAME ET
 # AUTH_HOSTNAME (les deux vhosts ci-dessous partagent le meme fichier) --
-# genere par deploy/tls/New-VaultCertDC.ps1.
+# genere par deploy/01_tls/New-VaultCertDC.ps1.
 # Jamais "tls internal" en cible : la chaine doit remonter jusqu'a l'AC
 # interne pour etre approuvee par les postes du domaine (GPO trust store).
 # -----------------------------------------------------------------------------
 # {$VAULT_HOSTNAME} et {$AUTH_HOSTNAME} : syntaxe Caddy de lecture de variable
 # d'environnement du PROCESSUS Caddy (pas docker-compose) -- injectees par
 # docker-compose.yml (service caddy, bloc environment:), lui-meme depuis .env
-# (VAULT_HOSTNAME/AUTH_HOSTNAME, cf. deploy/docker/.env.example). Rien a
+# (VAULT_HOSTNAME/AUTH_HOSTNAME, cf. deploy/03_docker/.env.example). Rien a
 # editer dans ce fichier pour changer de domaine.
 # -----------------------------------------------------------------------------
 # AUTH_HOSTNAME est un reverse proxy pur vers authentik-server (meme VM, meme

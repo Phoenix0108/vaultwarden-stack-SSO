@@ -7,8 +7,8 @@
 # faut importer dans Authentik, jamais le template source.
 # -----------------------------------------------------------------------------
 # Usage :
-#   deploy/authentik/render-blueprint.sh
-#   deploy/authentik/render-blueprint.sh /chemin/vers/environment.env
+#   deploy/05_authentik/render-blueprint.sh
+#   deploy/05_authentik/render-blueprint.sh /chemin/vers/environment.env
 # =============================================================================
 set -euo pipefail
 
@@ -22,7 +22,7 @@ info(){ echo -e "\033[36m[INFO]\033[0m $*"; }
 ok(){   echo -e "\033[32m[ OK ]\033[0m $*"; }
 fail(){ echo -e "\033[31m[FAIL]\033[0m $*" >&2; exit 1; }
 
-[ -f "$ENV_FILE" ] || fail "Config introuvable : $ENV_FILE -- copier deploy/environment.env.example vers deploy/environment.env et le renseigner d'abord."
+[ -f "$ENV_FILE" ] || fail "Config introuvable : $ENV_FILE -- copier deploy/00_environment.env.example vers deploy/environment.env et le renseigner d'abord."
 
 set -a
 # shellcheck disable=SC1090

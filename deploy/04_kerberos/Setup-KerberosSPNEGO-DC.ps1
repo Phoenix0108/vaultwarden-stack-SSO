@@ -5,7 +5,7 @@
  Setup-KerberosSPNEGO-DC.ps1
  Provisionne le compte de service Kerberos utilise par Authentik pour le SPNEGO
  (HTTP/<AUTH_HOSTNAME>). A executer sur le DC. Parametres par defaut lus depuis
- deploy/environment.env (via . .\deploy\Set-Environment.ps1, cf. EXEMPLE).
+ deploy/environment.env (via . .\deploy\00_Set-Environment.ps1, cf. EXEMPLE).
  Script 100% ASCII. Splatting uniquement (pas de backtick de continuation).
 ---------------------------------------------------------------------------------
  Ce que fait ce script :
@@ -30,8 +30,8 @@
     Phase 2, "Transfert du keytab").
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  . .\deploy\Set-Environment.ps1            # charge REALM/DOMAIN_NETBIOS/AUTH_HOSTNAME
-  cd deploy\kerberos
+  . .\deploy\00_Set-Environment.ps1            # charge REALM/DOMAIN_NETBIOS/AUTH_HOSTNAME
+  cd deploy\04_kerberos
   .\Setup-KerberosSPNEGO-DC.ps1             # -SpnHostname/-Realm/-Domain pris depuis l'environnement
 
   # ou explicitement, sans config prealable :
@@ -42,7 +42,7 @@
 [CmdletBinding()]
 param(
     # Defauts lus depuis les variables d'environnement chargees par
-    # ". .\deploy\Set-Environment.ps1" (deploy\environment.env) -- passer les
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env) -- passer les
     # parametres explicitement pour surcharger ponctuellement.
     [string] $ServiceAccountName = $(if ($env:KERBEROS_SVC_ACCOUNT) { $env:KERBEROS_SVC_ACCOUNT } else { 'svc-authentik-krb' }),
     [string] $SpnHostname = $env:AUTH_HOSTNAME,           # ex: auth.example.local
@@ -59,7 +59,7 @@ function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
 
 foreach ($p in @('SpnHostname','Realm','Domain')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
-        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\Set-Environment.ps1' (deploy\environment.env rempli)."
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
     }
 }
 

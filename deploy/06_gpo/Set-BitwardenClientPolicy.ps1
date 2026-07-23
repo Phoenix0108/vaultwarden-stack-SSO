@@ -5,7 +5,7 @@
  Pre-provisioning du serveur self-host (baseURL) pour l'extension navigateur
  Bitwarden (Chrome, Edge, Firefox), EN LOCAL sur la machine ou ce script est
  execute -- alternative/complement a la GPO fleet
- (deploy/gpo/Deploy-KerberosSSO-GPO.ps1) pour un test manuel poste par poste,
+ (deploy/06_gpo/Deploy-KerberosSSO-GPO.ps1) pour un test manuel poste par poste,
  ou une machine hors perimetre GPO. Remplace l'ancien Deploy-BitwardenClients.reg
  statique (une valeur -VaultBaseUrl en dur par site = pas reutilisable) par un
  script parametre, coherent avec deploy/environment.env comme les autres.
@@ -20,11 +20,11 @@
  masse (bitwarden.com/help/managed-browser-extension).
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  . .\deploy\Set-Environment.ps1
-  .\deploy\gpo\Set-BitwardenClientPolicy.ps1        # -VaultBaseUrl pris depuis l'environnement
+  . .\deploy\00_Set-Environment.ps1
+  .\deploy\06_gpo\Set-BitwardenClientPolicy.ps1        # -VaultBaseUrl pris depuis l'environnement
 
   # ou explicitement :
-  .\deploy\gpo\Set-BitwardenClientPolicy.ps1 -VaultBaseUrl 'https://vault.example.local'
+  .\deploy\06_gpo\Set-BitwardenClientPolicy.ps1 -VaultBaseUrl 'https://vault.example.local'
 =================================================================================
 #>
 [CmdletBinding()]
@@ -38,7 +38,7 @@ function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[ OK ] $m" -ForegroundColor Green }
 
 if ([string]::IsNullOrWhiteSpace($VaultBaseUrl)) {
-    throw "-VaultBaseUrl requis : le passer explicitement, ou executer d'abord '. .\deploy\Set-Environment.ps1' (deploy\environment.env rempli)."
+    throw "-VaultBaseUrl requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
 }
 
 Info "Pre-provisioning local de l'extension Bitwarden : base = $VaultBaseUrl"

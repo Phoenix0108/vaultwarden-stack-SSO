@@ -27,9 +27,9 @@
 
 ## Phase 0 — Configuration centrale
 
-**Fichier** : `deploy/environment.env` (copie remplie de `deploy/environment.env.example`)
+**Fichier** : `deploy/environment.env` (copie remplie de `deploy/00_environment.env.example`)
 
-Cette phase n'existe que sur l'hôte Docker (où vit le dépôt cloné) mais ses valeurs sont utilisées **des deux côtés** (DC et Debian) — sur le DC, `. .\deploy\Set-Environment.ps1` les charge dans la session PowerShell depuis une copie du même fichier.
+Cette phase n'existe que sur l'hôte Docker (où vit le dépôt cloné) mais ses valeurs sont utilisées **des deux côtés** (DC et Debian) — sur le DC, `. .\deploy\00_Set-Environment.ps1` les charge dans la session PowerShell depuis une copie du même fichier.
 
 ### 🟢 DEBIAN
 
@@ -38,7 +38,7 @@ git clone <URL_DU_DEPOT_GIT> vaultwarden-stack-SSO
 cd vaultwarden-stack-SSO
 git checkout claude/sso-kerberos-vaultwarden-ad-rzg3w0
 
-cp deploy/environment.env.example deploy/environment.env
+cp deploy/00_environment.env.example deploy/environment.env
 nano deploy/environment.env
 # Renseigner au minimum : REALM, DOMAIN_DNS, DOMAIN_NETBIOS, DC_IP,
 # VAULT_HOSTNAME, AUTH_HOSTNAME, CLIENT_SUBNETS, CA_CONFIG,
@@ -52,9 +52,9 @@ Copier ce même fichier rempli sur le DC (n'importe quel canal de transfert non 
 
 ```powershell
 cd C:\vaultwarden-stack-SSO
-. .\deploy\Set-Environment.ps1 -Path 'C:\chemin\vers\environment.env'
-# ou, si environment.env est a cote de Set-Environment.ps1 (deploy\environment.env) :
-. .\deploy\Set-Environment.ps1
+. .\deploy\00_Set-Environment.ps1 -Path 'C:\chemin\vers\environment.env'
+# ou, si environment.env est a cote de 00_Set-Environment.ps1 (deploy\environment.env) :
+. .\deploy\00_Set-Environment.ps1
 ```
 
 Le point (`.`) avant le chemin est obligatoire (dot-source) : sans lui, les variables ne survivent pas au retour du script. Tous les scripts PowerShell des phases suivantes lisent alors leurs paramètres par défaut (`$env:REALM`, `$env:DC_IP`, `$env:AUTH_HOSTNAME`, etc.) — plus besoin de les retaper sur chaque commande.
@@ -71,20 +71,20 @@ $env:REALM; $env:DC_IP; $env:AUTH_HOSTNAME; $env:VAULT_HOSTNAME
 
 ## Phase 1 — TLS Caddy (chaîne PKI interne)
 
-**Fichiers** : `deploy/caddy/Caddyfile`, `deploy/docker/docker-compose.yml`, `deploy/docker/Dockerfile`, `deploy/tls/New-VaultCertDC.ps1`, `deploy/tls/install-vault-cert.sh`
+**Fichiers** : `deploy/02_caddy/Caddyfile`, `deploy/03_docker/docker-compose.yml`, `deploy/03_docker/Dockerfile`, `deploy/01_tls/New-VaultCertDC.ps1`, `deploy/01_tls/install-vault-cert.sh`
 
 **Hypothèse** : DC et hôte Docker repartent de zéro — aucun certificat existant.
 
 > **Raccourci scripté (recommandé)** : `New-VaultCertDC.ps1` (🔵 DC) et `install-vault-cert.sh` (🟢 Debian) automatisent l'intégralité de cette phase — idempotents, avec retries réseau, gates intégrés, et lecture automatique de `deploy/environment.env`. install-vault-cert.sh installe aussi ses propres prérequis (clone du dépôt, Docker, smbclient, openssl) s'ils manquent.
 > ```powershell
-> # 🔵 DC (apres Phase 0 : . .\deploy\Set-Environment.ps1)
-> cd C:\vaultwarden-stack-SSO\deploy\tls
+> # 🔵 DC (apres Phase 0 : . .\deploy\00_Set-Environment.ps1)
+> cd C:\vaultwarden-stack-SSO\deploy\01_tls
 > .\New-VaultCertDC.ps1
 > ```
 > ```bash
 > # 🟢 Debian -- si le depot n'est pas encore cloné, ajouter REPO_URL=<url_du_depot> devant.
 > # Credentials SMB interactifs par defaut, ou SMB_PASSWORD=... pour un usage non interactif.
-> ./deploy/tls/install-vault-cert.sh
+> ./deploy/01_tls/install-vault-cert.sh
 > # ou, sur un serveur vierge, en une commande (copier d'abord ce fichier sur le serveur) :
 > # REPO_URL=<url_du_depot> ./install-vault-cert.sh
 > ```
@@ -97,7 +97,7 @@ Les blocs manuels ci-dessous restent la référence si un script échoue et qu'i
 Tout dans **la même session PowerShell élevée, sans interruption** (un écart de session entre `-new` et `-accept` rend le certificat orphelin). Le certificat porte deux SAN (`VAULT_HOSTNAME` et `AUTH_HOSTNAME`) : **tout passe par Caddy**, y compris `AUTH_HOSTNAME` (Caddy reverse-proxie vers le vrai Authentik) — un seul certificat suffit pour les deux vhosts.
 
 ```powershell
-# apres . .\deploy\Set-Environment.ps1
+# apres . .\deploy\00_Set-Environment.ps1
 $SpnHostname  = $env:VAULT_HOSTNAME
 $AuthHostname = $env:AUTH_HOSTNAME
 $CaConfig     = $env:CA_CONFIG        # "<machine CA>\<nom CA>", ex: SRVDC\ExampleCA
@@ -193,9 +193,9 @@ openssl x509 -in adcs-root.pem -noout -fingerprint -sha1
 openssl pkcs12 -legacy -in vault-new.pfx -nocerts -nodes -out vault.key -passin file:vault-new.pfxpass.txt
 cat vault-new.pem adcs-root.pem > vault.crt
 
-sudo install -o root -g root -m 644 vault.crt     deploy/caddy/certs/vault.crt
-sudo install -o root -g root -m 600 vault.key     deploy/caddy/certs/vault.key
-sudo install -o root -g root -m 644 adcs-root.pem deploy/docker/adcs-root.crt
+sudo install -o root -g root -m 644 vault.crt     deploy/02_caddy/certs/vault.crt
+sudo install -o root -g root -m 600 vault.key     deploy/02_caddy/certs/vault.key
+sudo install -o root -g root -m 644 adcs-root.pem deploy/03_docker/adcs-root.crt
 
 rm -f vault.crt vault.key vault-new.pfx vault-new.pfxpass.txt vault-new.cer vault-new.pem adcs-root.cer adcs-root.pem
 ```
@@ -211,13 +211,13 @@ Remove-Item C:\vault-new.pfx, C:\vault-new.pfxpass.txt, C:\vault-new.cer, C:\vau
 ### 🟢 DEBIAN — bloc 3 : secrets, déploiement, résolution locale
 
 ```bash
-cd deploy/docker
+cd deploy/03_docker
 cp .env.example .env
 chmod 600 .env
 openssl rand -base64 48   # coller le resultat dans .env -> VW_ADMIN_TOKEN=...
 nano .env                 # renseigner VW_ADMIN_TOKEN, VAULT_HOSTNAME, AUTH_HOSTNAME (memes valeurs que deploy/environment.env)
 
-mkdir -p vw-data ../caddy/logs   # deploy/caddy/logs, PAS deploy/docker/caddy/logs (sibling, pas enfant)
+mkdir -p vw-data ../02_caddy/logs   # deploy/02_caddy/logs, PAS deploy/03_docker/caddy/logs (sibling, pas enfant)
 docker compose up -d caddy
 
 # hote non domain-joint : pas de DNS pour son propre FQDN
@@ -225,7 +225,7 @@ echo "127.0.0.1 $VAULT_HOSTNAME" | sudo tee -a /etc/hosts
 echo "127.0.0.1 $AUTH_HOSTNAME"  | sudo tee -a /etc/hosts
 ```
 
-(`install-vault-cert.sh` fait tous les blocs 3-6 automatiquement, y compris la synchronisation `VAULT_HOSTNAME`/`AUTH_HOSTNAME` entre `deploy/environment.env` et `deploy/docker/.env`.)
+(`install-vault-cert.sh` fait tous les blocs 3-6 automatiquement, y compris la synchronisation `VAULT_HOSTNAME`/`AUTH_HOSTNAME` entre `deploy/environment.env` et `deploy/03_docker/.env`.)
 
 ### 🟢 DEBIAN — Gate Phase 1
 
@@ -233,7 +233,7 @@ echo "127.0.0.1 $AUTH_HOSTNAME"  | sudo tee -a /etc/hosts
 openssl s_client -connect "$VAULT_HOSTNAME:443" -servername "$VAULT_HOSTNAME" </dev/null 2>/dev/null | openssl x509 -noout -issuer
 # attendu : issuer = votre CA AD CS (CA_ROOT_THUMBPRINT)
 
-openssl s_client -connect "$VAULT_HOSTNAME:443" -servername "$VAULT_HOSTNAME" -CAfile deploy/docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
+openssl s_client -connect "$VAULT_HOSTNAME:443" -servername "$VAULT_HOSTNAME" -CAfile deploy/03_docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
 # attendu : Verify return code: 0 (ok)
 
 docker compose up -d --build vaultwarden
@@ -245,13 +245,13 @@ docker exec vaultwarden curl -fsS "https://$VAULT_HOSTNAME/alive"
 
 ## Phase 2 — Compte de service + SPN + keytab (DC)
 
-**Fichier** : `deploy/kerberos/Setup-KerberosSPNEGO-DC.ps1`
+**Fichier** : `deploy/04_kerberos/Setup-KerberosSPNEGO-DC.ps1`
 
 ### 🔵 DC
 
 ```powershell
-# apres . .\deploy\Set-Environment.ps1
-cd C:\vaultwarden-stack-SSO\deploy\kerberos
+# apres . .\deploy\00_Set-Environment.ps1
+cd C:\vaultwarden-stack-SSO\deploy\04_kerberos
 .\Setup-KerberosSPNEGO-DC.ps1
 ```
 
@@ -286,12 +286,12 @@ smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'del authentik.key
 
 ## Phase 2bis — Source LDAP (provisioning des comptes, prérequis Phase 3/5)
 
-**Fichier** : `deploy/kerberos/Setup-LDAPBind-DC.ps1`
+**Fichier** : `deploy/04_kerberos/Setup-LDAPBind-DC.ps1`
 
 ### 🔵 DC
 
 ```powershell
-cd C:\vaultwarden-stack-SSO\deploy\kerberos
+cd C:\vaultwarden-stack-SSO\deploy\04_kerberos
 .\Setup-LDAPBind-DC.ps1
 ```
 
@@ -301,13 +301,13 @@ Crée (idempotent) l'OU `LDAP_SYNC_OU_NAME` (défaut `Vaultwarden` — périmèt
 
 ```bash
 smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'get authentik-ldap-bind.txt'
-openssl s_client -connect "$DC_IP:636" -CAfile deploy/docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
+openssl s_client -connect "$DC_IP:636" -CAfile deploy/03_docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
 # attendu : Verify return code: 0 -- sinon ne pas configurer la Source LDAP en LDAPS tant que ce n'est pas corrige
 ```
 
 ### 🖱️ Source LDAP — action GUI (secret, jamais scriptable vers un tiers)
 
-Directory → Federation & Social login → Create → **LDAP Source** : Server URI `ldaps://<DC_IP>:636`, Bind CN = Bind DN affiché par le script, Bind Password = contenu de `authentik-ldap-bind.txt`, Base DN = `OU=<LDAP_SYNC_OU_NAME>,<DN du domaine>`. Détails complets : `deploy/authentik/README.md` §0.
+Directory → Federation & Social login → Create → **LDAP Source** : Server URI `ldaps://<DC_IP>:636`, Bind CN = Bind DN affiché par le script, Bind Password = contenu de `authentik-ldap-bind.txt`, Base DN = `OU=<LDAP_SYNC_OU_NAME>,<DN du domaine>`. Détails complets : `deploy/05_authentik/README.md` §0.
 
 ### 🟢 DEBIAN — purge
 
@@ -323,17 +323,17 @@ shred -u authentik-ldap-bind.txt
 
 ## Phase 3 — Source Kerberos Authentik
 
-**Fichiers** : `deploy/authentik/kerberos-sso-blueprint.yaml` (template), `deploy/authentik/render-blueprint.sh`, `deploy/authentik/README.md`
+**Fichiers** : `deploy/05_authentik/kerberos-sso-blueprint.yaml` (template), `deploy/05_authentik/render-blueprint.sh`, `deploy/05_authentik/README.md`
 
 ### 🟢 DEBIAN
 
 ```bash
-./deploy/authentik/render-blueprint.sh
-# produit deploy/authentik/kerberos-sso-blueprint.rendered.yaml (jamais versionne),
+./deploy/05_authentik/render-blueprint.sh
+# produit deploy/05_authentik/kerberos-sso-blueprint.rendered.yaml (jamais versionne),
 # avec REALM/DC_IP/DOMAIN_DNS/CLIENT_SUBNETS substitues depuis deploy/environment.env
 # (CLIENT_SUBNETS peut lister plusieurs CIDR -- voir l'INFO affiche par le script)
 
-docker exec -i authentik-server ak import_blueprint < deploy/authentik/kerberos-sso-blueprint.rendered.yaml
+docker exec -i authentik-server ak import_blueprint < deploy/05_authentik/kerberos-sso-blueprint.rendered.yaml
 # authentik-server = nom du service Docker (meme VM, meme docker-compose.yml)
 
 base64 -w0 authentik.keytab > authentik.keytab.b64
@@ -341,7 +341,7 @@ base64 -w0 authentik.keytab > authentik.keytab.b64
 
 ### 🖱️ Upload du keytab — action GUI (secret, jamais scriptable vers un tiers)
 
-Coller le contenu de `authentik.keytab.b64` dans Directory → Federation & Social login → *Kerberos SPNEGO SSO* → champ Keytab. Puis confirmer dans l'UI : `spnego_server_name` vide (volontaire, cf. `deploy/authentik/README.md` §5), `user_matching_mode = username_link` (relie au compte LDAP existant, ne crée jamais — `sync_users = false` l'interdit de toute façon), `sync_users = false`.
+Coller le contenu de `authentik.keytab.b64` dans Directory → Federation & Social login → *Kerberos SPNEGO SSO* → champ Keytab. Puis confirmer dans l'UI : `spnego_server_name` vide (volontaire, cf. `deploy/05_authentik/README.md` §5), `user_matching_mode = username_link` (relie au compte LDAP existant, ne crée jamais — `sync_users = false` l'interdit de toute façon), `sync_users = false`.
 
 ### 🟢 DEBIAN — purge
 
@@ -365,13 +365,13 @@ Si vous avez plusieurs réseaux clients (VLAN filaire + WiFi + VPN...), refaire 
 
 ## Phase 4 — GPO postes clients
 
-**Fichiers** : `deploy/gpo/Deploy-KerberosSSO-GPO.ps1`, `deploy/gpo/Set-BitwardenClientPolicy.ps1`, `deploy/gpo/firefox-policies.json.example`
+**Fichiers** : `deploy/06_gpo/Deploy-KerberosSSO-GPO.ps1`, `deploy/06_gpo/Set-BitwardenClientPolicy.ps1`, `deploy/06_gpo/firefox-policies.json.example`
 
 ### 🔵 DC
 
 ```powershell
-# apres . .\deploy\Set-Environment.ps1
-cd C:\vaultwarden-stack-SSO\deploy\gpo
+# apres . .\deploy\00_Set-Environment.ps1
+cd C:\vaultwarden-stack-SSO\deploy\06_gpo
 .\Deploy-KerberosSSO-GPO.ps1
 ```
 
@@ -381,8 +381,8 @@ Ce script fait tout, y compris générer et déposer `firefox-policies.json` dan
 
 ```powershell
 # alternative/complement a la GPO fleet, pour un test manuel poste par poste
-# (apres . .\deploy\Set-Environment.ps1, ou en passant -VaultBaseUrl explicitement)
-.\deploy\gpo\Set-BitwardenClientPolicy.ps1
+# (apres . .\deploy\00_Set-Environment.ps1, ou en passant -VaultBaseUrl explicitement)
+.\deploy\06_gpo\Set-BitwardenClientPolicy.ps1
 
 New-Item -ItemType Directory -Force -Path 'C:\Program Files\Mozilla Firefox\distribution' | Out-Null
 Copy-Item -Path "\\$env:DOMAIN_DNS\SYSVOL\$env:DOMAIN_DNS\scripts\firefox-policies.json" -Destination 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Force
@@ -405,12 +405,12 @@ Pour un déploiement fleet (pas juste le poste de test), convertir la copie Fire
 
 ## Phase 5 — Bascule OIDCWarden + TDE
 
-**Fichiers** : `deploy/docker/Dockerfile`, `deploy/docker/docker-compose.yml`, `deploy/docker/.env.example`, `docs/02_risk_analysis_tde.md`
+**Fichiers** : `deploy/03_docker/Dockerfile`, `deploy/03_docker/docker-compose.yml`, `deploy/03_docker/.env.example`, `docs/02_risk_analysis_tde.md`
 
 ### 🟢 DEBIAN — bloc 1 : backup, secrets
 
 ```bash
-cd deploy/docker
+cd deploy/03_docker
 tar czf ../../backup-vw-data-$(date +%Y%m%d-%H%M%S).tar.gz vw-data/
 mkdir -p /tmp/restore-test
 tar xzf ../../backup-vw-data-*.tar.gz -C /tmp/restore-test
@@ -427,7 +427,7 @@ nano .env
 ### 🟢 DEBIAN — bloc 2 : build et déploiement
 
 ```bash
-cd deploy/docker
+cd deploy/03_docker
 docker compose build
 docker compose up -d
 docker compose logs -f vaultwarden   # surveiller le demarrage / erreurs SSO_AUTHORITY
@@ -457,7 +457,7 @@ docker compose up -d vaultwarden
 **Fichier** : `docs/03_supervision_siem.md`
 
 ```bash
-shred -u ../../backup-vw-data-*.tar.gz   # chemin relatif a deploy/docker (cwd apres Phase 5) ; adapter si vous avez change de repertoire -- si conserve le temps du test uniquement, sinon archiver en lieu sur avant de supprimer
+shred -u ../../backup-vw-data-*.tar.gz   # chemin relatif a deploy/03_docker (cwd apres Phase 5) ; adapter si vous avez change de repertoire -- si conserve le temps du test uniquement, sinon archiver en lieu sur avant de supprimer
 ```
 
 🔵 :

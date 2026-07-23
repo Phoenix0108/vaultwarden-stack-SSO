@@ -2,9 +2,9 @@
 .env
 *.env
 !*.env.example
-deploy/caddy/certs/*
-!deploy/caddy/certs/.gitkeep
-deploy/docker/adcs-root.crt
+deploy/02_caddy/certs/*
+!deploy/02_caddy/certs/.gitkeep
+deploy/03_docker/adcs-root.crt
 *.keytab
 *.key
 *.pfx
@@ -12,10 +12,10 @@ deploy/docker/adcs-root.crt
 !*.example.pem
 
 # Données runtime
-deploy/docker/vw-data/
-deploy/caddy/logs/
+deploy/03_docker/vw-data/
+deploy/02_caddy/logs/
 
 # Divers
 *.log
 .DS_Store
-deploy/authentik/kerberos-sso-blueprint.rendered.yaml
+deploy/05_authentik/kerberos-sso-blueprint.rendered.yaml

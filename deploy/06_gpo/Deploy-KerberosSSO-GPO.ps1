@@ -8,7 +8,7 @@
  et pre-provisionne le serveur pour l'extension navigateur Bitwarden. A
  executer depuis un poste/serveur avec RSAT GPMC (typiquement le DC).
  Parametres par defaut lus depuis deploy/environment.env (via
- . .\deploy\Set-Environment.ps1). Script 100% ASCII. Splatting uniquement.
+ . .\deploy\00_Set-Environment.ps1). Script 100% ASCII. Splatting uniquement.
 ---------------------------------------------------------------------------------
  Couvre (via Set-GPRegistryValue, verifie contre la documentation officielle
  au moment de la redaction) :
@@ -35,7 +35,7 @@
     \scripts\firefox-policies.json) -- voir etape 6 plus bas. Il ne reste plus
     qu'a router ce fichier vers distribution\policies.json sur les postes
     (GPO Files preference ou script de connexion, cf. WARN en fin de script) ;
-    deploy/gpo/firefox-policies.json.example montre juste le resultat attendu,
+    deploy/06_gpo/firefox-policies.json.example montre juste le resultat attendu,
     ce n'est plus lui qui est deploye.
  NE couvre PAS (limitations documentees, actions manuelles requises) :
   - Client desktop Bitwarden (Electron) : aucun mecanisme officiel de
@@ -46,8 +46,8 @@
     delegation Kerberos = pas de surface KCD supplementaire).
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  . .\deploy\Set-Environment.ps1
-  cd deploy\gpo
+  . .\deploy\00_Set-Environment.ps1
+  cd deploy\06_gpo
   .\Deploy-KerberosSSO-GPO.ps1                       # tout pris depuis l'environnement
 
   # ou explicitement, sans config prealable :
@@ -82,7 +82,7 @@ param(
 )
 foreach ($p in @('TargetOuDn','AuthHostname','VaultBaseUrl','DomainDns')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
-        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\Set-Environment.ps1' (deploy\environment.env rempli)."
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
     }
 }
 # Lien direct qui court-circuite l'ecran email + l'ecran "identifiant d'organisation"
@@ -167,7 +167,7 @@ Ok "Signet gere applique (Chrome: ManagedBookmarks, Edge: ManagedFavorites)"
 # --- 6. Firefox : network.negotiate-auth.trusted-uris + signet, genere et depose
 #    dans SYSVOL (pas de registre ADMX Mozilla assez stable pour Set-GPRegistryValue
 #    -- Firefox lit sa policy depuis distribution\policies.json). Genere ICI a
-#    partir des memes variables que le reste du script -- deploy/gpo/firefox-
+#    partir des memes variables que le reste du script -- deploy/06_gpo/firefox-
 #    policies.json.example n'est qu'une illustration statique, plus la source
 #    reellement deployee. --------------------------------------------------------
 Info "Generation de firefox-policies.json ($AuthHostname trusted, signet SSO)"

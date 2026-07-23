@@ -8,7 +8,7 @@ Livrables pour un SSO passwordless intranet : ouverture de session Windows (Kerb
 
 ## Démarrage rapide
 
-1. Copier `deploy/environment.env.example` vers `deploy/environment.env` et renseigner **vos** valeurs (realm AD, DC, hostnames, réseaux clients...) — voir les commentaires du fichier.
+1. Copier `deploy/00_environment.env.example` vers `deploy/environment.env` et renseigner **vos** valeurs (realm AD, DC, hostnames, réseaux clients...) — voir les commentaires du fichier.
 2. Suivre `runbook/RUNBOOK_installation.md`, phase par phase (Phase 0 = charger cette config des deux côtés, DC et hôte Docker). Chaque phase a un **gate** : ne pas passer à la suivante tant que le gate n'est pas vert.
 
 | Élément (exemple — remplacer par le vôtre dans `deploy/environment.env`) | Valeur d'exemple |
@@ -22,27 +22,27 @@ Livrables pour un SSO passwordless intranet : ouverture de session Windows (Kerb
 ## Contenu
 
 ```
-deploy/
-├── environment.env.example           # CONFIG CENTRALE : realm, hostnames, IP DC, reseaux clients (VLAN)... a copier en environment.env
-├── Set-Environment.ps1               # charge environment.env dans la session PowerShell (DC) -- dot-source obligatoire
-├── caddy/
-│   ├── Caddyfile                     # reverse proxy TLS unique pour VAULT_HOSTNAME ET AUTH_HOSTNAME ({$VAR} -- "tout passe par Caddy")
-│   └── certs/                        # vault.crt + vault.key (non versionnés, voir .gitignore)
-├── docker/
-│   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden + Authentik (server/worker/PostgreSQL/Redis) — même VM, même compose
-│   ├── Dockerfile                    # image dérivée : embarque la CA interne, version OIDCWarden épinglée
-│   └── .env.example                  # secrets + hostnames (à copier en .env, chmod 600)
-├── tls/
+deploy/                                  # tout est numéroté dans l'ordre d'exécution (Phase 0 -> Phase 4)
+├── 00_environment.env.example         # CONFIG CENTRALE : realm, hostnames, IP DC, reseaux clients (VLAN)... a copier en environment.env
+├── 00_Set-Environment.ps1             # charge environment.env dans la session PowerShell (DC) -- dot-source obligatoire
+├── 01_tls/
 │   ├── New-VaultCertDC.ps1           # génère + exporte le certificat + la racine CA (Phase 1, DC)
 │   └── install-vault-cert.sh         # transfert, conversion, installation, déploiement + gates (Phase 1, hôte Docker)
-├── kerberos/
+├── 02_caddy/
+│   ├── Caddyfile                     # reverse proxy TLS unique pour VAULT_HOSTNAME ET AUTH_HOSTNAME ({$VAR} -- "tout passe par Caddy")
+│   └── certs/                        # vault.crt + vault.key (non versionnés, voir .gitignore)
+├── 03_docker/
+│   ├── docker-compose.yml            # stack durcie : Caddy + OIDCWarden + Authentik (server/worker/PostgreSQL/Redis) — même VM, même compose ; revisité Phase 5
+│   ├── Dockerfile                    # image dérivée : embarque la CA interne, version OIDCWarden épinglée
+│   └── .env.example                  # secrets + hostnames (à copier en .env, chmod 600)
+├── 04_kerberos/
 │   ├── Setup-KerberosSPNEGO-DC.ps1   # compte de service + SPN + keytab (Phase 2, à exécuter sur le DC)
 │   └── Setup-LDAPBind-DC.ps1         # compte de bind LDAP + OU cible (Phase 2bis, provisioning, à exécuter sur le DC)
-├── authentik/
+├── 05_authentik/
 │   ├── kerberos-sso-blueprint.yaml   # TEMPLATE : Source Kerberos + policy de redirection multi-VLAN (Phase 3)
 │   ├── render-blueprint.sh           # substitue les placeholders depuis environment.env -> kerberos-sso-blueprint.rendered.yaml
 │   └── README.md                     # Source LDAP (§0) + étapes manuelles Kerberos (upload keytab) + gates
-└── gpo/
+└── 06_gpo/
     ├── Deploy-KerberosSSO-GPO.ps1    # GPO navigateurs + pré-provisioning Bitwarden + Firefox policies (Phase 4)
     ├── Set-BitwardenClientPolicy.ps1 # variante manuelle poste par poste (remplace un ancien .reg statique)
     └── firefox-policies.json.example # illustration -- le vrai fichier est généré par Deploy-KerberosSSO-GPO.ps1
@@ -60,13 +60,13 @@ runbook/
 
 | Phase | Étape | Fichier / commande | Gate |
 |---|---|---|---|
-| 0 | Configuration centrale | `deploy/environment.env` (copie de `.example`), `. .\deploy\Set-Environment.ps1` côté DC | Variables chargées (`$env:REALM`, `$env:DC_IP`, ...), pas de placeholder restant |
-| 1 | TLS Caddy (chaîne CA interne) | `deploy/caddy/Caddyfile`, `deploy/docker/docker-compose.yml`, `install-vault-cert.sh` | `openssl s_client` → issuer CA interne, `Verify return code: 0` ; `docker exec vaultwarden curl -fsS https://.../alive` |
-| 2 | Compte de service + SPN + keytab (DC) | `deploy/kerberos/Setup-KerberosSPNEGO-DC.ps1` | Script auto-vérifié (anti-doublon SPN, msDS-SupportedEncryptionTypes=24, kvno, SHA-256 keytab) ; validation réelle en Phase 3 |
-| 2bis | Source LDAP (provisioning des comptes) | `deploy/kerberos/Setup-LDAPBind-DC.ps1` + config manuelle Authentik | Sync LDAP sans erreur, comptes visibles dans Directory → Users |
-| 3 | Kerberos Source Authentik + flow SPNEGO | `deploy/authentik/render-blueprint.sh` + `README.md` | Poste domaine (dans un des `CLIENT_SUBNETS`) → aucun formulaire ; hors subnet → fallback password |
-| 4 | GPO postes clients (négociation Kerberos navigateurs) | `deploy/gpo/Deploy-KerberosSSO-GPO.ps1` | `gpresult /r` + header `Authorization: Negotiate` |
-| 5 | Bascule OIDCWarden + TDE | `deploy/docker/*` mis à jour, `docs/02_risk_analysis_tde.md` | Login SSO complet, device approval, master password non redemandé |
+| 0 | Configuration centrale | `deploy/environment.env` (copie de `.example`), `. .\deploy\00_Set-Environment.ps1` côté DC | Variables chargées (`$env:REALM`, `$env:DC_IP`, ...), pas de placeholder restant |
+| 1 | TLS Caddy (chaîne CA interne) | `deploy/02_caddy/Caddyfile`, `deploy/03_docker/docker-compose.yml`, `install-vault-cert.sh` | `openssl s_client` → issuer CA interne, `Verify return code: 0` ; `docker exec vaultwarden curl -fsS https://.../alive` |
+| 2 | Compte de service + SPN + keytab (DC) | `deploy/04_kerberos/Setup-KerberosSPNEGO-DC.ps1` | Script auto-vérifié (anti-doublon SPN, msDS-SupportedEncryptionTypes=24, kvno, SHA-256 keytab) ; validation réelle en Phase 3 |
+| 2bis | Source LDAP (provisioning des comptes) | `deploy/04_kerberos/Setup-LDAPBind-DC.ps1` + config manuelle Authentik | Sync LDAP sans erreur, comptes visibles dans Directory → Users |
+| 3 | Kerberos Source Authentik + flow SPNEGO | `deploy/05_authentik/render-blueprint.sh` + `README.md` | Poste domaine (dans un des `CLIENT_SUBNETS`) → aucun formulaire ; hors subnet → fallback password |
+| 4 | GPO postes clients (négociation Kerberos navigateurs) | `deploy/06_gpo/Deploy-KerberosSSO-GPO.ps1` | `gpresult /r` + header `Authorization: Negotiate` |
+| 5 | Bascule OIDCWarden + TDE | `deploy/03_docker/*` mis à jour, `docs/02_risk_analysis_tde.md` | Login SSO complet, device approval, master password non redemandé |
 | 6 | Hygiène, supervision, runbook final | `docs/03_supervision_siem.md` | Purge debug, SIEM, matrice de déprovisionnement |
 
 **Les 7 phases (0 à 6) sont livrées et conçues pour être réutilisées sur n'importe quelle infrastructure AD.** Chaque gate reste à valider par vous sur votre environnement. Voir `runbook/RUNBOOK_installation.md` pour le parcours consolidé, phase par phase.

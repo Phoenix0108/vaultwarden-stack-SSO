@@ -1,5 +1,5 @@
 {
-  "_comment": "Exemple statique uniquement -- le vrai fichier est genere dynamiquement par deploy/gpo/Deploy-KerberosSSO-GPO.ps1 (etape 6, depuis AUTH_HOSTNAME/VAULT_HOSTNAME/environment.env) et depose directement dans SYSVOL. Ce fichier montre juste le resultat attendu.",
+  "_comment": "Exemple statique uniquement -- le vrai fichier est genere dynamiquement par deploy/06_gpo/Deploy-KerberosSSO-GPO.ps1 (etape 6, depuis AUTH_HOSTNAME/VAULT_HOSTNAME/environment.env) et depose directement dans SYSVOL. Ce fichier montre juste le resultat attendu.",
   "policies": {
     "NegotiateAuth": {
       "Trusted": ["https://auth.example.local"]

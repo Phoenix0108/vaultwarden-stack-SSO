@@ -1,22 +1,22 @@
 #Requires -Version 5.1
 <#
 =================================================================================
- Set-Environment.ps1
- Charge deploy/environment.env (copie remplie de environment.env.example) dans
+ 00_Set-Environment.ps1
+ Charge deploy/environment.env (copie remplie de 00_environment.env.example) dans
  les variables d'environnement de la session PowerShell COURANTE. DOT-SOURCE
- OBLIGATOIRE (". .\deploy\Set-Environment.ps1"), sinon les variables ne
- survivent pas au retour du script -- un simple ".\Set-Environment.ps1"
+ OBLIGATOIRE (". .\deploy\00_Set-Environment.ps1"), sinon les variables ne
+ survivent pas au retour du script -- un simple ".\00_Set-Environment.ps1"
  (sans le point) les definit dans un sous-processus qui disparait aussitot.
- Tous les autres scripts PowerShell de ce depot (deploy/kerberos, deploy/tls,
- deploy/gpo) lisent leurs parametres par defaut depuis ces variables : executer
+ Tous les autres scripts PowerShell de ce depot (deploy/04_kerberos, deploy/01_tls,
+ deploy/06_gpo) lisent leurs parametres par defaut depuis ces variables : executer
  ce script UNE FOIS par session avant les autres, plutot que de retaper le
  realm/l'IP du DC/etc. sur chaque commande.
  Format attendu dans environment.env : KEY=VALUE par ligne, '#' = commentaire,
  lignes vides ignorees. Script 100% ASCII.
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  . .\deploy\Set-Environment.ps1
-  . .\deploy\Set-Environment.ps1 -Path C:\vaultwarden-stack-SSO\deploy\environment.env
+  . .\deploy\00_Set-Environment.ps1
+  . .\deploy\00_Set-Environment.ps1 -Path C:\vaultwarden-stack-SSO\deploy\environment.env
 =================================================================================
 #>
 param(
@@ -25,7 +25,7 @@ param(
 
 if (-not (Test-Path $Path)) {
     Write-Host "[FAIL] Fichier de configuration introuvable : $Path" -ForegroundColor Red
-    Write-Host "       Copier deploy\environment.env.example vers deploy\environment.env et le renseigner d'abord." -ForegroundColor Red
+    Write-Host "       Copier deploy\00_environment.env.example vers deploy\environment.env et le renseigner d'abord." -ForegroundColor Red
     return
 }
 

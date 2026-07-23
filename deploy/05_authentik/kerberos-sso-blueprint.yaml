@@ -4,14 +4,14 @@
 # -----------------------------------------------------------------------------
 # A importer via Admin > System > Blueprints (ou `ak import_blueprint`).
 # Ne couvre PAS l'upload du keytab (binaire, secret) : celui-ci reste une
-# action manuelle post-import (cf. deploy/authentik/README.md, etape 1).
+# action manuelle post-import (cf. deploy/05_authentik/README.md, etape 1).
 # -----------------------------------------------------------------------------
 # CE FICHIER EST UN TEMPLATE : ne jamais l'importer tel quel. Les placeholders
 # ci-dessous (<REALM>, <DC_IP>, <DOMAIN_DNS>, <CLIENT_SUBNETS_PYLIST>) sont
 # substitues automatiquement depuis deploy/environment.env par :
-#   deploy/authentik/render-blueprint.sh
+#   deploy/05_authentik/render-blueprint.sh
 # (lit REALM, DC_IP, DOMAIN_DNS, CLIENT_SUBNETS -- voir
-# deploy/environment.env.example pour le format). Produit
+# deploy/00_environment.env.example pour le format). Produit
 # kerberos-sso-blueprint.rendered.yaml (jamais versionne), c'est CE fichier
 # rendu qu'il faut importer, jamais le template source. CLIENT_SUBNETS accepte
 # une liste de CIDR separes par des virgules : plusieurs reseaux/VLAN clients

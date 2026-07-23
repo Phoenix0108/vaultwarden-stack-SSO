@@ -7,10 +7,10 @@
  (provisioning/synchronisation des comptes utilisateurs -- distinct du compte
  SPNEGO svc-authentik-krb, qui ne sert qu'a valider les tickets Kerberos et ne
  doit jamais etre utilise pour un bind). A executer sur le DC. Parametres par
- defaut lus depuis deploy/environment.env (via . .\deploy\Set-Environment.ps1).
+ defaut lus depuis deploy/environment.env (via . .\deploy\00_Set-Environment.ps1).
  Script 100% ASCII. Splatting uniquement.
 ---------------------------------------------------------------------------------
- Pourquoi ce script existe : deploy/authentik/README.md et kerberos-sso-blueprint.yaml
+ Pourquoi ce script existe : deploy/05_authentik/README.md et kerberos-sso-blueprint.yaml
  supposent depuis le debut "une source LDAP existante (scope OU=Vaultwarden)"
  comme prerequis -- mais rien dans ce depot ne la provisionne. Sur un domaine
  reparti de zero, ce prerequis n'existe pas encore : ce script le cree.
@@ -40,15 +40,15 @@
  Ce que ce script NE fait PAS (hors perimetre / actions manuelles requises) :
   - La configuration de la Source LDAP cote Authentik (Directory -> Federation
     & Social login -> Create -> LDAP Source) reste une action GUI manuelle
-    (secret jamais transmis a un tiers scriptable) -- voir deploy/authentik/README.md.
+    (secret jamais transmis a un tiers scriptable) -- voir deploy/05_authentik/README.md.
   - Le peuplement de l'OU cible avec les vrais comptes utilisateurs a synchroniser.
   - Le transfert du fichier de mot de passe vers le Debian et sa suppression du
     DC APRES usage restent des etapes manuelles distinctes (meme discipline que
     le keytab Phase 2).
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  . .\deploy\Set-Environment.ps1
-  cd deploy\kerberos
+  . .\deploy\00_Set-Environment.ps1
+  cd deploy\04_kerberos
   .\Setup-LDAPBind-DC.ps1                   # -Realm/-Domain pris depuis l'environnement
 
   # ou explicitement :
@@ -58,7 +58,7 @@
 [CmdletBinding()]
 param(
     # Defauts lus depuis les variables d'environnement chargees par
-    # ". .\deploy\Set-Environment.ps1" (deploy\environment.env).
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env).
     [string] $ServiceAccountName = $(if ($env:LDAP_BIND_ACCOUNT) { $env:LDAP_BIND_ACCOUNT } else { 'svc-authentik-ldap' }),
     [string] $TargetOuName = $(if ($env:LDAP_SYNC_OU_NAME) { $env:LDAP_SYNC_OU_NAME } else { 'Vaultwarden' }),   # OU=<TargetOuName> a la racine du domaine
     [string] $Realm = $env:REALM,                            # ex: EXAMPLE.LOCAL (force en MAJUSCULES)
@@ -75,7 +75,7 @@ function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
 
 foreach ($p in @('Realm','Domain')) {
     if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
-        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\Set-Environment.ps1' (deploy\environment.env rempli)."
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
     }
 }
 

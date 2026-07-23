@@ -87,7 +87,7 @@ Authentik tournant désormais sur la même VM que Vaultwarden/Caddy (même `dock
 - **`authentik_internal`** (`internal: true`) : `authentik-server`/`authentik-worker` ↔ `postgresql`/`redis` uniquement. Base de données et cache ne sont joignables depuis aucun autre réseau.
 - **`frontend`** : seul réseau non-`internal`, exposant uniquement Caddy (443/80) vers l'extérieur du host Docker.
 - Vérification périodique recommandée (cf. `docs/03_supervision_siem.md`) : `docker network inspect <nom> | grep Internal` doit rester `true` sur les trois réseaux internes — une dérive réintroduirait un chemin d'egress WAN/LAN non maîtrisé.
-- **SPNEGO** exposé uniquement sur le(s) périmètre(s) intranet : la policy Authentik ne tente le SPNEGO que pour les clients d'un des CIDR listés dans `CLIENT_SUBNETS` (cf. `deploy/authentik/kerberos-sso-blueprint.yaml`, plusieurs réseaux/VLAN supportés nativement), hors de ces plages = fallback formulaire. Ce filtrage reste applicatif (policy Authentik), pas réseau, puisque Authentik n'est plus atteint par un chemin LAN dédié.
+- **SPNEGO** exposé uniquement sur le(s) périmètre(s) intranet : la policy Authentik ne tente le SPNEGO que pour les clients d'un des CIDR listés dans `CLIENT_SUBNETS` (cf. `deploy/05_authentik/kerberos-sso-blueprint.yaml`, plusieurs réseaux/VLAN supportés nativement), hors de ces plages = fallback formulaire. Ce filtrage reste applicatif (policy Authentik), pas réseau, puisque Authentik n'est plus atteint par un chemin LAN dédié.
 
 ## Points critiques hérités de l'itération AD FS (toujours valables)
 

@@ -12,8 +12,8 @@ Cette source n'existe pas par défaut sur un domaine reparti de zéro : elle doi
 
 1. **DC** : provisionner le compte de bind dédié (jamais `Administrator`, jamais le compte SPNEGO) :
    ```powershell
-   . .\deploy\Set-Environment.ps1
-   cd deploy\kerberos
+   . .\deploy\00_Set-Environment.ps1
+   cd deploy\04_kerberos
    .\Setup-LDAPBind-DC.ps1
    ```
    Crée (idempotent) l'OU `LDAP_SYNC_OU_NAME` (défaut `Vaultwarden` — périmètre de recherche — à peupler séparément avec les vrais comptes à synchroniser si ce n'est pas déjà fait), le compte de bind (défaut `svc-authentik-ldap`, lecture seule, aucune délégation, membre du groupe deny-interactive-logon), et écrit le mot de passe dans `C:\authentik-ldap-bind.txt` (ACL restreinte, jamais affiché en console).
@@ -22,7 +22,7 @@ Cette source n'existe pas par défaut sur un domaine reparti de zéro : elle doi
    smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'get authentik-ldap-bind.txt'
    ```
 3. **Authentik (GUI)** : Directory → Federation & Social login → Create → **LDAP Source**.
-   - Server URI : `ldaps://<DC_IP>:636` (jamais `ldap://` en clair pour un bind avec mot de passe, jamais "disable full TLS validation" — vérifier d'abord `openssl s_client -connect <DC_IP>:636 -CAfile deploy/docker/adcs-root.crt` depuis l'hôte Docker → `Verify return code: 0`).
+   - Server URI : `ldaps://<DC_IP>:636` (jamais `ldap://` en clair pour un bind avec mot de passe, jamais "disable full TLS validation" — vérifier d'abord `openssl s_client -connect <DC_IP>:636 -CAfile deploy/03_docker/adcs-root.crt` depuis l'hôte Docker → `Verify return code: 0`).
    - Bind CN : le Bind DN affiché par le script.
    - Bind Password : contenu de `authentik-ldap-bind.txt`.
    - Base DN : `OU=<LDAP_SYNC_OU_NAME>,<DN de votre domaine>` (le périmètre créé à l'étape 1).
@@ -35,9 +35,9 @@ Cette source n'existe pas par défaut sur un domaine reparti de zéro : elle doi
 
 Mécanique (vérifiée directement dans le code source Authentik, après plusieurs échecs par simple lecture de doc) : il n'existe **pas** de fonction permettant à une Expression Policy de renvoyer une URL de redirection — une policy ne renvoie qu'un booléen. La redirection réelle passe donc par un Redirect Stage inséré *avant* le stage d'identification (order plus bas) ; la policy IP sert de gate sur ce Redirect Stage : hors de tous les `CLIENT_SUBNETS`, le stage est simplement sauté et le flow continue normalement vers l'identification/formulaire password.
 
-1. Rendre le template : `./deploy/authentik/render-blueprint.sh` (lit `deploy/environment.env` : `REALM`, `DC_IP`, `DOMAIN_DNS`, `CLIENT_SUBNETS` — cette dernière accepte une liste de CIDR séparés par des virgules, un par réseau/VLAN client autorisé) → produit `kerberos-sso-blueprint.rendered.yaml` (jamais versionné).
+1. Rendre le template : `./deploy/05_authentik/render-blueprint.sh` (lit `deploy/environment.env` : `REALM`, `DC_IP`, `DOMAIN_DNS`, `CLIENT_SUBNETS` — cette dernière accepte une liste de CIDR séparés par des virgules, un par réseau/VLAN client autorisé) → produit `kerberos-sso-blueprint.rendered.yaml` (jamais versionné).
 2. Vérifier le slug réel du flow d'authentification par défaut sur votre instance (Admin → Flows → celui marqué *default-authentication-flow*) et l'`order` de son stage d'identification (généralement `10`) — le blueprint insère le Redirect Stage à `order: 5` ; ajuster si votre installation diffère.
-3. Importer le fichier **rendu** (pas le template) : Admin → System → Blueprints → Import, ou `docker exec -i authentik-server ak import_blueprint < deploy/authentik/kerberos-sso-blueprint.rendered.yaml`.
+3. Importer le fichier **rendu** (pas le template) : Admin → System → Blueprints → Import, ou `docker exec -i authentik-server ak import_blueprint < deploy/05_authentik/kerberos-sso-blueprint.rendered.yaml`.
 4. **Upload manuel du keytab** (jamais transité par un service tiers) :
    ```
    base64 -w0 authentik.keytab > authentik.keytab.b64
