@@ -4,15 +4,16 @@
 =================================================================================
  Deploy-KerberosSSO-GPO.ps1
  Cree/met a jour une GPO qui permet aux navigateurs des postes du domaine de
- negocier Kerberos vers Authentik (auth.vaultwardensso.local) sans invite de
- mot de passe, et pre-provisionne le serveur pour l'extension navigateur
- Bitwarden. A executer depuis un poste/serveur avec RSAT GPMC (typiquement
- le DC). Script 100% ASCII. Splatting uniquement.
+ negocier Kerberos vers Authentik (AuthHostname) sans invite de mot de passe,
+ et pre-provisionne le serveur pour l'extension navigateur Bitwarden. A
+ executer depuis un poste/serveur avec RSAT GPMC (typiquement le DC).
+ Parametres par defaut lus depuis deploy/environment.env (via
+ . .\deploy\00_Set-Environment.ps1). Script 100% ASCII. Splatting uniquement.
 ---------------------------------------------------------------------------------
  Couvre (via Set-GPRegistryValue, verifie contre la documentation officielle
  au moment de la redaction) :
   - Zone Intranet (IE/Edge legacy engine) : Site to Zone Assignment List.
-  - Chrome/Edge : AuthServerAllowlist = auth.vaultwardensso.local.
+  - Chrome/Edge : AuthServerAllowlist = AuthHostname.
   - Extension navigateur Bitwarden (Chrome/Edge/Firefox) : cle "3rdparty"
     pre-provisionnant le serveur self-host (evite la saisie manuelle du
     baseURL au premier lancement de l'extension). Source verifiee :
@@ -21,17 +22,22 @@
     vers $VaultBaseUrl/#/sso?identifier=... : ce lien declenche l'auto-submit
     cote client (sso.component.ts, bitwarden/clients) et court-circuite les
     ecrans email + identifiant SSO du web-vault -- poste du domaine = SPNEGO
-    immediat au clic, aucune saisie. Le serveur OIDCWarden/Vaultwarden est
-    mono-instance/mono-IdP : /connect/authorize ne valide aucun identifiant
-    d'organisation, la valeur du parametre "identifier" est donc arbitraire.
+    immediat au clic, aucune saisie. La valeur du parametre "identifier" DOIT
+    rester l'identifiant magique '00000000-01DC-01DC-01DC-000000000000' --
+    voir le commentaire sur $SsoIdentifier ci-dessous, piege deja rencontre
+    avec une valeur lisible qui casse l'enrollment TDE en aval.
     Le formulaire email/mot de passe classique reste intact et accessible
     (poste hors domaine, break-glass) -- ce signet est un raccourci, pas une
     restriction serveur (SSO_ONLY reste sous le controle du gate Phase 5.7).
+  - Firefox network.negotiate-auth.trusted-uris + signet SSO : genere
+    dynamiquement (a partir de $AuthHostname/$SsoDeepLink, PAS d'un fichier
+    fige) et deploye directement dans SYSVOL (\\<DomainDns>\SYSVOL\<DomainDns>
+    \scripts\firefox-policies.json) -- voir etape 6 plus bas. Il ne reste plus
+    qu'a router ce fichier vers distribution\policies.json sur les postes
+    (GPO Files preference ou script de connexion, cf. WARN en fin de script) ;
+    deploy/06_gpo/firefox-policies.json.example montre juste le resultat attendu,
+    ce n'est plus lui qui est deploye.
  NE couvre PAS (limitations documentees, actions manuelles requises) :
-  - Firefox network.negotiate-auth.trusted-uris : le schema de registre exact
-    de l'ADMX Mozilla n'est pas assez stable/documente pour etre pousse en
-    aveugle ici. Utiliser deploy/gpo/firefox-policies.json (GPO Files
-    preference vers distribution\policies.json), cf. WARN en fin de script.
   - Client desktop Bitwarden (Electron) : aucun mecanisme officiel de
     pre-provisioning du baseURL via registre a la date de redaction ; laisser
     la saisie manuelle unique (persistee par profil) ou s'appuyer sur un lien
@@ -40,24 +46,45 @@
     delegation Kerberos = pas de surface KCD supplementaire).
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  .\Deploy-KerberosSSO-GPO.ps1 -TargetOuDn 'OU=Postes,DC=vaultwardensso,DC=local' `
-     -AuthHostname 'auth.vaultwardensso.local' -VaultBaseUrl 'https://vault.vaultwardensso.local'
+  . .\deploy\00_Set-Environment.ps1
+  cd deploy\06_gpo
+  .\Deploy-KerberosSSO-GPO.ps1                       # tout pris depuis l'environnement
+
+  # ou explicitement, sans config prealable :
+  .\Deploy-KerberosSSO-GPO.ps1 -TargetOuDn 'OU=Postes,DC=example,DC=local' `
+     -AuthHostname 'auth.example.local' -VaultBaseUrl 'https://vault.example.local' `
+     -DomainDns 'example.local'
 =================================================================================
 #>
 [CmdletBinding()]
 param(
     [string] $GpoName = 'Kerberos-SSO-Browsers',
-    [Parameter(Mandatory)] [string] $TargetOuDn,           # DN de l'OU contenant les postes clients
-    [string] $AuthHostname = 'auth.vaultwardensso.local',
-    [string] $VaultBaseUrl = 'https://vault.vaultwardensso.local',
+    [string] $TargetOuDn = $env:GPO_TARGET_OU_DN,           # DN de l'OU contenant les postes clients
+    [string] $AuthHostname = $env:AUTH_HOSTNAME,
+    [string] $VaultBaseUrl = $(if ($env:VAULT_HOSTNAME) { "https://$($env:VAULT_HOSTNAME)" } else { $null }),
+    [string] $DomainDns = $env:DOMAIN_DNS,                  # pour le depot SYSVOL de firefox-policies.json (etape 6)
     [string] $BitwardenChromeExtId = 'nngceckbapebfimnlniiiahkandclblb',   # meme ID Chrome et Edge (store Chromium)
     [string] $BitwardenFirefoxExtId = '{446900e4-71c2-419f-a6a7-df9c091e268b}',
-    # Valeur libre : le serveur (OIDCWarden/Vaultwarden) est mono-instance/mono-IdP,
-    # /connect/authorize ne valide aucun identifiant d'organisation cote serveur.
-    # Cette valeur ne sert qu'a satisfaire la validation du formulaire Angular du
-    # web-vault avant l'auto-submit (cf. sso.component.ts, bitwarden/clients).
-    [string] $SsoIdentifier = 'vaultwardensso'
+    # NE PAS CHANGER cette valeur pour un texte lisible (piege deja rencontre : une
+    # valeur arbitraire comme "vaultwardensso" satisfait bien /connect/authorize
+    # -- mono-instance/mono-IdP, aucune validation server-side a ce stade -- MAIS
+    # casse l'etape suivante de l'enrollment TDE. OIDCWarden expose une route
+    # dediee, sans garde d'appartenance a l'organisation, UNIQUEMENT sur cet
+    # identifiant magique exact :
+    #   GET /organizations/00000000-01DC-01DC-01DC-000000000000/policies/master-password
+    # (cf. src/api/core/organizations.rs, get_dummy_master_password_policy, rank=1).
+    # Avec toute autre valeur, cette requete tombe sur la route generique (rank=2)
+    # qui exige une adhesion CONFIRMEE a l'organisation -- or au moment de cet appel
+    # l'utilisateur est seulement invite (pending), pas confirme : 401 "Error
+    # getting the organization id", ecran de creation du mot de passe principal qui
+    # ne se charge jamais. Confirme en lab.
+    [string] $SsoIdentifier = $(if ($env:SSO_ORG_ENROLLMENT_IDENTIFIER) { $env:SSO_ORG_ENROLLMENT_IDENTIFIER } else { '00000000-01DC-01DC-01DC-000000000000' })
 )
+foreach ($p in @('TargetOuDn','AuthHostname','VaultBaseUrl','DomainDns')) {
+    if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
+    }
+}
 # Lien direct qui court-circuite l'ecran email + l'ecran "identifiant d'organisation"
 # du web-vault : sso.component.ts declenche un submit() automatique des le ngOnInit
 # quand le query param "identifier" est present (comportement documente comme
@@ -136,12 +163,41 @@ $bookmarksJson = (@(
 Set-GPRegistryValue -Name $GpoName -Key 'HKLM\SOFTWARE\Policies\Google\Chrome' -ValueName 'ManagedBookmarks' -Type String -Value $bookmarksJson | Out-Null
 Set-GPRegistryValue -Name $GpoName -Key 'HKLM\SOFTWARE\Policies\Microsoft\Edge' -ValueName 'ManagedFavorites' -Type String -Value $bookmarksJson | Out-Null
 Ok "Signet gere applique (Chrome: ManagedBookmarks, Edge: ManagedFavorites)"
-Warn "Firefox : signet equivalent a ajouter via la policy 'Bookmarks' de deploy/gpo/firefox-policies.json."
+
+# --- 6. Firefox : network.negotiate-auth.trusted-uris + signet, genere et depose
+#    dans SYSVOL (pas de registre ADMX Mozilla assez stable pour Set-GPRegistryValue
+#    -- Firefox lit sa policy depuis distribution\policies.json). Genere ICI a
+#    partir des memes variables que le reste du script -- deploy/06_gpo/firefox-
+#    policies.json.example n'est qu'une illustration statique, plus la source
+#    reellement deployee. --------------------------------------------------------
+Info "Generation de firefox-policies.json ($AuthHostname trusted, signet SSO)"
+$firefoxPolicy = [ordered]@{
+    policies = [ordered]@{
+        NegotiateAuth = @{ Trusted = @("https://$AuthHostname") }
+        Bookmarks = @(
+            [ordered]@{
+                Title     = 'Vaultwarden (SSO)'
+                URL       = $SsoDeepLink
+                Placement = 'toolbar'
+                Folder    = 'Vaultwarden'
+            }
+        )
+    }
+} | ConvertTo-Json -Depth 6
+
+$sysvolScriptsDir = "\\$DomainDns\SYSVOL\$DomainDns\scripts"
+try {
+    New-Item -ItemType Directory -Force -Path $sysvolScriptsDir -ErrorAction Stop | Out-Null
+    Set-Content -Path (Join-Path $sysvolScriptsDir 'firefox-policies.json') -Value $firefoxPolicy -Encoding ascii -ErrorAction Stop
+    Ok "firefox-policies.json depose dans $sysvolScriptsDir (reproduit sur SYSVOL, disponible sur tous les DC apres convergence)"
+} catch {
+    Warn "Depot SYSVOL echoue ($_) -- generer/copier firefox-policies.json manuellement (voir ci-dessous)."
+}
 
 Write-Host ""
 Ok "GPO '$GpoName' configuree et liee. gpupdate /force sur un poste test avant validation."
-Warn "Firefox network.negotiate-auth.trusted-uris NON automatise ici : deployer"
-Warn "  deploy/gpo/firefox-policies.json vers %ProgramFiles%\Mozilla Firefox\distribution\policies.json"
+Warn "Firefox : copier $sysvolScriptsDir\firefox-policies.json vers"
+Warn "  %ProgramFiles%\Mozilla Firefox\distribution\policies.json sur chaque poste"
 Warn "  (GPO Files preference ou script de connexion) puis verifier about:policies sur un poste test."
 Warn "Desktop Bitwarden (Electron) : pas de pre-provisioning baseURL automatise, saisie manuelle unique."
 Warn "GATE : gpresult /r sur un poste test + DevTools -> en-tete 'Authorization: Negotiate' sur la requete vers $AuthHostname."

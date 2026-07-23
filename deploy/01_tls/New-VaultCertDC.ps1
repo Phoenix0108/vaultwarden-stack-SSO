@@ -2,8 +2,8 @@
 <#
 =================================================================================
  New-VaultCertDC.ps1
- Genere et exporte le certificat serveur (SAN couvrant vault.vaultwardensso.local
- ET auth.vaultwardensso.local -- tout passe par Caddy, un seul certificat suffit
+ Genere et exporte le certificat serveur (SAN couvrant VAULT_HOSTNAME ET
+ AUTH_HOSTNAME -- deploy/environment.env -- tout passe par Caddy, un seul certificat suffit
  pour les deux vhosts) + la racine AD CS, en une seule execution de script (le
  decalage de session entre certreq -new et -accept rend le certificat orphelin
  -- vecu en pratique lors des essais manuels ; un script atomique elimine ce
@@ -37,11 +37,14 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $SpnHostname = 'vault.vaultwardensso.local',
-    [string] $AuthHostname = 'auth.vaultwardensso.local',
-    [string] $CaConfig = 'SRVADTEST\vaultwardensso-srvadtest-CA',
-    [string] $CertTemplate = 'WebServer',
-    [string] $RootThumbprint = '473BAAC9189D52715E3E73CED9BEC691293BED10',
+    # Defauts lus depuis les variables d'environnement chargees par
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env) -- passer les
+    # parametres explicitement pour surcharger ponctuellement.
+    [string] $SpnHostname = $env:VAULT_HOSTNAME,
+    [string] $AuthHostname = $env:AUTH_HOSTNAME,
+    [string] $CaConfig = $env:CA_CONFIG,
+    [string] $CertTemplate = $(if ($env:CERT_TEMPLATE) { $env:CERT_TEMPLATE } else { 'WebServer' }),
+    [string] $RootThumbprint = $env:CA_ROOT_THUMBPRINT,
     [string] $WorkDir = 'C:\',
     [switch] $SkipCleanup
 )
@@ -50,6 +53,12 @@ function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[ OK ] $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Fail($m){ Write-Host "[FAIL] $m" -ForegroundColor Red; exit 1 }
+
+foreach ($p in @('SpnHostname','AuthHostname','CaConfig','RootThumbprint')) {
+    if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
+        Fail "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
+    }
+}
 
 Set-Location $WorkDir
 $prefix = 'vault-new'
@@ -154,5 +163,5 @@ try {
 
 Write-Host ""
 Ok "Termine. Fichiers prets dans ${WorkDir} : $prefix.pfx, $prefix.pfxpass.txt, $prefix.cer, adcs-root.cer"
-Warn "Transferer ces 4 fichiers vers l'hote Docker (smbclient), puis executer deploy/tls/install-vault-cert.sh la-bas."
+Warn "Transferer ces 4 fichiers vers l'hote Docker (smbclient), puis executer deploy/01_tls/install-vault-cert.sh la-bas."
 Warn "Purger ensuite $prefix.pfx et $prefix.pfxpass.txt du DC (secrets) une fois le transfert confirme."

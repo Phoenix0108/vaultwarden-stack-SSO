@@ -4,19 +4,19 @@
 
 ```mermaid
 flowchart LR
-    subgraph Client["Poste client du domaine (CLIENT_SUBNET)"]
+    subgraph Client["Poste client du domaine (un des CLIENT_SUBNETS)"]
         BR[Navigateur — TGT de session Windows]
     end
 
-    subgraph DC["DC — 192.168.100.76"]
+    subgraph DC["DC — DC_IP"]
         AD["AD DS + DNS"]
         CA["AD CS (racine)"]
-        KRB["svc-authentik-krb\n(SPN HTTP/auth.*)"]
+        KRB["svc-authentik-krb\n(SPN HTTP/AUTH_HOSTNAME)"]
     end
 
-    subgraph DockerHost["Hôte Docker — 192.168.100.89 (Authentik = même VM, même docker-compose)"]
+    subgraph DockerHost["Hôte Docker (Authentik = même VM, même docker-compose)"]
         subgraph FE["réseau frontend"]
-            CADDY["Caddy 443/80\n(vault.* + auth.*, seul point TLS)"]
+            CADDY["Caddy 443/80\n(VAULT_HOSTNAME + AUTH_HOSTNAME, seul point TLS)"]
         end
         subgraph BE["réseau backend (internal)"]
             VW["OIDCWarden :80"]
@@ -56,10 +56,10 @@ sequenceDiagram
     participant N as Navigateur
     participant A as Authentik
     participant V as OIDCWarden
-    U->>N: Ouvre https://vault.vaultwardensso.local
+    U->>N: Ouvre https://VAULT_HOSTNAME
     N->>V: GET (via Caddy)
     V-->>N: redirect /authorize (Authentik)
-    N->>A: GET /authorize (+ policy redirect si CLIENT_SUBNET)
+    N->>A: GET /authorize (+ policy redirect si client dans CLIENT_SUBNETS)
     A->>N: 401 Negotiate
     N->>A: Negotiate <ticket SPNEGO, TGT session>
     A->>A: Valide via svc-authentik-krb (keytab)
@@ -87,7 +87,7 @@ Authentik tournant désormais sur la même VM que Vaultwarden/Caddy (même `dock
 - **`authentik_internal`** (`internal: true`) : `authentik-server`/`authentik-worker` ↔ `postgresql`/`redis` uniquement. Base de données et cache ne sont joignables depuis aucun autre réseau.
 - **`frontend`** : seul réseau non-`internal`, exposant uniquement Caddy (443/80) vers l'extérieur du host Docker.
 - Vérification périodique recommandée (cf. `docs/03_supervision_siem.md`) : `docker network inspect <nom> | grep Internal` doit rester `true` sur les trois réseaux internes — une dérive réintroduirait un chemin d'egress WAN/LAN non maîtrisé.
-- **SPNEGO** exposé uniquement sur le périmètre intranet : la policy Authentik ne tente le SPNEGO que pour les clients du `CLIENT_SUBNET` (cf. `deploy/authentik/kerberos-sso-blueprint.yaml`), hors subnet = fallback formulaire. Ce filtrage reste applicatif (policy Authentik), pas réseau, puisque Authentik n'est plus atteint par un chemin LAN dédié.
+- **SPNEGO** exposé uniquement sur le(s) périmètre(s) intranet : la policy Authentik ne tente le SPNEGO que pour les clients d'un des CIDR listés dans `CLIENT_SUBNETS` (cf. `deploy/05_authentik/kerberos-sso-blueprint.yaml`, plusieurs réseaux/VLAN supportés nativement), hors de ces plages = fallback formulaire. Ce filtrage reste applicatif (policy Authentik), pas réseau, puisque Authentik n'est plus atteint par un chemin LAN dédié.
 
 ## Points critiques hérités de l'itération AD FS (toujours valables)
 

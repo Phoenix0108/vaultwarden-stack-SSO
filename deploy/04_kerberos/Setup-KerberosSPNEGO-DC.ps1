@@ -4,7 +4,8 @@
 =================================================================================
  Setup-KerberosSPNEGO-DC.ps1
  Provisionne le compte de service Kerberos utilise par Authentik pour le SPNEGO
- (HTTP/auth.vaultwardensso.local). A executer sur le DC (192.168.100.76).
+ (HTTP/<AUTH_HOSTNAME>). A executer sur le DC. Parametres par defaut lus depuis
+ deploy/environment.env (via . .\deploy\00_Set-Environment.ps1, cf. EXEMPLE).
  Script 100% ASCII. Splatting uniquement (pas de backtick de continuation).
 ---------------------------------------------------------------------------------
  Ce que fait ce script :
@@ -29,17 +30,25 @@
     Phase 2, "Transfert du keytab").
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  .\Setup-KerberosSPNEGO-DC.ps1 -SpnHostname 'auth.vaultwardensso.local' `
-     -Realm 'VAULTWARDENSSO.LOCAL' -Domain 'VAULTWARDENSSO'
+  . .\deploy\00_Set-Environment.ps1            # charge REALM/DOMAIN_NETBIOS/AUTH_HOSTNAME
+  cd deploy\04_kerberos
+  .\Setup-KerberosSPNEGO-DC.ps1             # -SpnHostname/-Realm/-Domain pris depuis l'environnement
+
+  # ou explicitement, sans config prealable :
+  .\Setup-KerberosSPNEGO-DC.ps1 -SpnHostname 'auth.example.local' `
+     -Realm 'EXAMPLE.LOCAL' -Domain 'EXAMPLE'
 =================================================================================
 #>
 [CmdletBinding()]
 param(
-    [string] $ServiceAccountName = 'svc-authentik-krb',
-    [Parameter(Mandatory)] [string] $SpnHostname,        # ex: auth.vaultwardensso.local
-    [Parameter(Mandatory)] [string] $Realm,               # ex: VAULTWARDENSSO.LOCAL (force en MAJUSCULES)
-    [Parameter(Mandatory)] [string] $Domain,               # NetBIOS, ex: VAULTWARDENSSO
-    [string] $DenyInteractiveGroup = 'GG-SvcAccounts-DenyInteractiveLogon',
+    # Defauts lus depuis les variables d'environnement chargees par
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env) -- passer les
+    # parametres explicitement pour surcharger ponctuellement.
+    [string] $ServiceAccountName = $(if ($env:KERBEROS_SVC_ACCOUNT) { $env:KERBEROS_SVC_ACCOUNT } else { 'svc-authentik-krb' }),
+    [string] $SpnHostname = $env:AUTH_HOSTNAME,           # ex: auth.example.local
+    [string] $Realm = $env:REALM,                          # ex: EXAMPLE.LOCAL (force en MAJUSCULES)
+    [string] $Domain = $env:DOMAIN_NETBIOS,                 # NetBIOS, ex: EXAMPLE
+    [string] $DenyInteractiveGroup = $(if ($env:DENY_INTERACTIVE_GROUP) { $env:DENY_INTERACTIVE_GROUP } else { 'GG-SvcAccounts-DenyInteractiveLogon' }),
     [string] $KeytabPath = 'C:\authentik.keytab',
     [int] $PasswordLength = 28
 )
@@ -47,6 +56,12 @@ $ErrorActionPreference = 'Stop'
 function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[ OK ] $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
+
+foreach ($p in @('SpnHostname','Realm','Domain')) {
+    if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
+    }
+}
 
 $Realm = $Realm.ToUpperInvariant()
 $Spn = "HTTP/$SpnHostname"
@@ -109,7 +124,7 @@ $userArgs = @{
     PasswordNeverExpires = $true
     CannotChangePassword = $true
     AccountNotDelegated = $true
-    Description = 'Compte de service SPNEGO Authentik (HTTP/auth.vaultwardensso.local). Ne pas utiliser pour un logon interactif.'
+    Description = "Compte de service SPNEGO Authentik (HTTP/$SpnHostname). Ne pas utiliser pour un logon interactif."
 }
 New-ADUser @userArgs
 Ok "Compte '$ServiceAccountName' cree (Domain Users uniquement, aucune delegation, aucun autre groupe)"

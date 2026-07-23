@@ -11,10 +11,13 @@
 # AVANT de basculer (cf. deploy/docs/02_risk_analysis_tde.md).
 #
 # Prerequis : adcs-root.crt (PEM) present dans ce repertoire, empreinte SHA-1
-# verifiee AVANT le build (thumbprint AD CS = 473BAAC9189D52715E3E73CED9BEC691293BED10) :
+# verifiee AVANT le build (comparer avec CA_ROOT_THUMBPRINT de
+# deploy/environment.env) :
 #   openssl x509 -inform der -in adcs-root.cer -out adcs-root.crt
 #   openssl x509 -in adcs-root.crt -noout -fingerprint -sha1
 # adcs-root.crt est exclu du depot (.gitignore) : a placer manuellement avant build.
+# (install-vault-cert.sh fait tout ceci automatiquement -- ce Dockerfile est
+# documente pour le cas d'un build manuel/diagnostic.)
 # =============================================================================
 FROM timshel/oidcwarden:v2026.6.4-1
 

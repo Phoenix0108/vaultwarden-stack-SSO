@@ -6,10 +6,11 @@
  Provisionne le compte de bind LDAP utilise par la Source LDAP d'Authentik
  (provisioning/synchronisation des comptes utilisateurs -- distinct du compte
  SPNEGO svc-authentik-krb, qui ne sert qu'a valider les tickets Kerberos et ne
- doit jamais etre utilise pour un bind). A executer sur le DC (192.168.100.76).
+ doit jamais etre utilise pour un bind). A executer sur le DC. Parametres par
+ defaut lus depuis deploy/environment.env (via . .\deploy\00_Set-Environment.ps1).
  Script 100% ASCII. Splatting uniquement.
 ---------------------------------------------------------------------------------
- Pourquoi ce script existe : deploy/authentik/README.md et kerberos-sso-blueprint.yaml
+ Pourquoi ce script existe : deploy/05_authentik/README.md et kerberos-sso-blueprint.yaml
  supposent depuis le debut "une source LDAP existante (scope OU=Vaultwarden)"
  comme prerequis -- mais rien dans ce depot ne la provisionne. Sur un domaine
  reparti de zero, ce prerequis n'existe pas encore : ce script le cree.
@@ -39,30 +40,44 @@
  Ce que ce script NE fait PAS (hors perimetre / actions manuelles requises) :
   - La configuration de la Source LDAP cote Authentik (Directory -> Federation
     & Social login -> Create -> LDAP Source) reste une action GUI manuelle
-    (secret jamais transmis a un tiers scriptable) -- voir deploy/authentik/README.md.
+    (secret jamais transmis a un tiers scriptable) -- voir deploy/05_authentik/README.md.
   - Le peuplement de l'OU cible avec les vrais comptes utilisateurs a synchroniser.
   - Le transfert du fichier de mot de passe vers le Debian et sa suppression du
     DC APRES usage restent des etapes manuelles distinctes (meme discipline que
     le keytab Phase 2).
 ---------------------------------------------------------------------------------
  EXEMPLE :
-  .\Setup-LDAPBind-DC.ps1 -Realm 'VAULTWARDENSSO.LOCAL' -Domain 'VAULTWARDENSSO'
+  . .\deploy\00_Set-Environment.ps1
+  cd deploy\04_kerberos
+  .\Setup-LDAPBind-DC.ps1                   # -Realm/-Domain pris depuis l'environnement
+
+  # ou explicitement :
+  .\Setup-LDAPBind-DC.ps1 -Realm 'EXAMPLE.LOCAL' -Domain 'EXAMPLE'
 =================================================================================
 #>
 [CmdletBinding()]
 param(
-    [string] $ServiceAccountName = 'svc-authentik-ldap',
-    [string] $TargetOuName = 'Vaultwarden',                # OU=<TargetOuName> a la racine du domaine
-    [Parameter(Mandatory)] [string] $Realm,                 # ex: VAULTWARDENSSO.LOCAL (force en MAJUSCULES)
-    [Parameter(Mandatory)] [string] $Domain,                # NetBIOS, ex: VAULTWARDENSSO
-    [string] $DenyInteractiveGroup = 'GG-SvcAccounts-DenyInteractiveLogon',
+    # Defauts lus depuis les variables d'environnement chargees par
+    # ". .\deploy\00_Set-Environment.ps1" (deploy\environment.env).
+    [string] $ServiceAccountName = $(if ($env:LDAP_BIND_ACCOUNT) { $env:LDAP_BIND_ACCOUNT } else { 'svc-authentik-ldap' }),
+    [string] $TargetOuName = $(if ($env:LDAP_SYNC_OU_NAME) { $env:LDAP_SYNC_OU_NAME } else { 'Vaultwarden' }),   # OU=<TargetOuName> a la racine du domaine
+    [string] $Realm = $env:REALM,                            # ex: EXAMPLE.LOCAL (force en MAJUSCULES)
+    [string] $Domain = $env:DOMAIN_NETBIOS,                   # NetBIOS, ex: EXAMPLE
+    [string] $DenyInteractiveGroup = $(if ($env:DENY_INTERACTIVE_GROUP) { $env:DENY_INTERACTIVE_GROUP } else { 'GG-SvcAccounts-DenyInteractiveLogon' }),
     [string] $PasswordOutFile = 'C:\authentik-ldap-bind.txt',
-    [int] $PasswordLength = 28
+    [int] $PasswordLength = 28,
+    [string] $DcIp = $env:DC_IP    # informatif uniquement (message final) -- pas utilise pour la creation du compte
 )
 $ErrorActionPreference = 'Stop'
 function Info($m){ Write-Host "[INFO] $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "[ OK ] $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
+
+foreach ($p in @('Realm','Domain')) {
+    if ([string]::IsNullOrWhiteSpace((Get-Variable -Name $p -ValueOnly))) {
+        throw "-$p requis : le passer explicitement, ou executer d'abord '. .\deploy\00_Set-Environment.ps1' (deploy\environment.env rempli)."
+    }
+}
 
 $Realm = $Realm.ToUpperInvariant()
 
@@ -158,9 +173,9 @@ Info "Base DN  : $ouDn"
 Warn "PROCHAINE ETAPE MANUELLE : transferer $PasswordOutFile vers le Debian via smbclient (jamais RDP clipboard),"
 Warn "  coller Bind DN + Base DN + mot de passe dans Authentik (Directory -> Federation & Social login -> Create -> LDAP Source),"
 Warn "  puis supprimer $PasswordOutFile du DC (et le fichier transitoire cote Debian) une fois la Source LDAP validee."
-Warn "Utiliser ldaps://192.168.100.76:636 cote Authentik (jamais LDAP non chiffre 389 pour un bind avec mot de passe,"
+Warn "Utiliser ldaps://${DcIp}:636 cote Authentik (jamais LDAP non chiffre 389 pour un bind avec mot de passe,"
 Warn "  et jamais 'disable full TLS validation'). Si l'AC interne a l'autoenrollment 'Domain Controller Authentication'"
 Warn "  actif (courant sur une AD CS Enterprise), le DC porte deja un certificat Schannel emis par la meme racine que"
 Warn "  vault.crt/auth.crt -- verifier via certlm.msc (Personal store) sinon en emettre un manuellement avant de configurer"
-Warn "  la Source LDAP cote Authentik. Gate : 'openssl s_client -connect 192.168.100.76:636 -CAfile adcs-root.crt' depuis"
+Warn "  la Source LDAP cote Authentik. Gate : 'openssl s_client -connect ${DcIp}:636 -CAfile adcs-root.crt' depuis"
 Warn "  le Debian doit retourner 'Verify return code: 0'."
