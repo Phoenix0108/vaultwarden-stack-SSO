@@ -12,8 +12,40 @@
 >
 > **Plusieurs réseaux/VLAN clients** : la redirection Kerberos automatique (Phase 3) accepte une **liste** de CIDR (`CLIENT_SUBNETS`, séparés par des virgules) — LAN filaire, WiFi corporate, VPN site-to-site, autre site AD, etc. peuvent coexister sans configuration supplémentaire. Un client hors de toutes ces plages n'est jamais bloqué : il voit simplement le formulaire mot de passe classique (fallback), jamais une erreur.
 
+## Pré-requis côté Active Directory (à valider AVANT la Phase 0)
+
+Rien de ce qui suit n'est automatisé par ce dépôt — ce sont des conditions d'existence de votre AD, pas des étapes que les scripts peuvent créer à votre place. Un seul manquant bloque une phase précise, indiquée entre parenthèses.
+
+**Infrastructure et rôles**
+- [ ] Domaine AD DS existant, niveau fonctionnel **Windows Server 2008 ou supérieur** (nécessaire pour l'attribut `msDS-SupportedEncryptionTypes` — AES only, Phase 2). Tout domaine à jour aujourd'hui satisfait ce prérequis, mais un domaine legacy peut ne pas l'avoir.
+- [ ] **AD CS (Certificate Services)** — Autorité de certification Enterprise (racine ou subordonnée) installée et opérationnelle sur le domaine. Sans AD CS, toute la Phase 1 (TLS) est à refaire avec une PKI tierce (hors périmètre de ce dépôt).
+- [ ] Gabarit de certificat **`WebServer`** (ou équivalent renseigné dans `CERT_TEMPLATE`) publié sur la CA et **enrollable** par le compte qui exécutera `New-VaultCertDC.ps1` (droit *Enroll*, cf. Security tab du gabarit dans `certtmpl.msc`) — Phase 1.
+- [ ] Gabarit **`Domain Controller Authentication`** (ou équivalent) auto-enrollé ou émis manuellement sur le(s) DC utilisé(s) pour LDAPS — sans certificat Schannel valide sur le port 636, la Source LDAP (Phase 2bis) ne pourra jamais se connecter en `ldaps://`. Vérifiable via `certlm.msc` (magasin Personal du DC) ou le gate `openssl s_client -connect <DC_IP>:636`.
+
+**Outils requis sur le DC (ou le poste d'administration RSAT)**
+- [ ] Module PowerShell **`ActiveDirectory`** (RSAT-AD-PowerShell) — `Setup-KerberosSPNEGO-DC.ps1` et `Setup-LDAPBind-DC.ps1` en dépendent explicitement (`#Requires -Modules ActiveDirectory`).
+- [ ] Module PowerShell **`GroupPolicy`** + console **GPMC** — `Deploy-KerberosSSO-GPO.ps1` en dépend (`#Requires -Modules GroupPolicy`), et la GPMC GUI reste nécessaire pour l'étape manuelle de refus de logon interactif (Phase 2, User Rights Assignment — pas de cmdlet fiable pour ça).
+- [ ] `ktpass.exe` et `setspn.exe` disponibles (natifs sur un DC ; sur un membre du domaine, installer les RSAT AD DS Tools) — Phase 2, génération du keytab.
+
+**Permissions du compte d'exécution (sur le DC)**
+- [ ] Droits suffisants pour : créer des OU (`New-ADOrganizationalUnit`), créer des comptes utilisateurs et groupes de sécurité (`New-ADUser`/`New-ADGroup`), modifier `msDS-SupportedEncryptionTypes` et réinitialiser un mot de passe de compte de service (ce que fait `ktpass`), écrire un SPN (`setspn -S`) — en pratique Domain Admin, ou une délégation équivalente sur l'OU cible si vous voulez éviter ce niveau de privilège.
+- [ ] Droits de création/liaison de GPO (membre de *Group Policy Creator Owners* ou Domain Admins) **et** droit d'édition sur l'OU liée (`GPO_TARGET_OU_DN`) — Phase 4.
+- [ ] Administrateur local sur le DC lui-même (les scripts écrivent des fichiers sensibles en `C:\`, ex. keytab, mot de passe de bind LDAP) — toutes phases DC.
+
+**Structure AD à avoir déjà, ou à créer manuellement**
+- [ ] Une **OU pour les postes clients** doit déjà exister et son DN être renseigné dans `GPO_TARGET_OU_DN` (`deploy/environment.env`) — ce dépôt ne la crée jamais, seule l'OU de synchronisation LDAP (`LDAP_SYNC_OU_NAME`, défaut `Vaultwarden`) est créée automatiquement par `Setup-LDAPBind-DC.ps1`.
+- [ ] Les comptes utilisateurs à faire passer en SSO doivent être **déplacés/créés** dans cette OU de synchronisation LDAP — aucune automatisation de peuplement n'est fournie (délibéré : le choix des comptes concernés est une décision métier, pas technique).
+
+**Réseau et résolution de noms**
+- [ ] Enregistrements **DNS A** pour `VAULT_HOSTNAME` et `AUTH_HOSTNAME` créés dans la zone DNS intégrée à l'AD (ou tout DNS que vos postes clients interrogent), pointant vers l'IP de l'hôte Docker — sans ça, seul le poste sur lequel vous avez édité `hosts` manuellement pourra résoudre ces noms (le `/etc/hosts` de la Phase 1 ne couvre que l'hôte Docker lui-même, jamais les clients).
+- [ ] **Synchronisation horaire** (NTP) entre le DC, l'hôte Docker et les postes clients — Kerberos refuse tout ticket hors d'une fenêtre de tolérance (5 minutes par défaut) ; un décalage d'horloge produit des échecs SPNEGO qui ressemblent à tort à un problème de config plutôt qu'à un problème de temps.
+- [ ] Port **636 (LDAPS)** et le port utilisé pour Kerberos/SPNEGO (443 via Caddy pour le SPNEGO applicatif, le KDC lui-même reste sur ses ports standards 88/464 côté DC) joignables entre l'hôte Docker et le DC.
+
+---
+
 ## Checklist globale
 
+- [ ] Pré-requis AD validés (voir section ci-dessus)
 - [ ] Phase 0 — Configuration centrale (`deploy/environment.env`)
 - [ ] Phase 1 — TLS Caddy
 - [ ] Phase 2 — Compte de service + SPN + keytab (DC)
