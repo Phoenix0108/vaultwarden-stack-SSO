@@ -104,13 +104,32 @@ nano deploy/environment.env
 
 ### 🔵 DC
 
-Copier ce même fichier rempli sur le DC (n'importe quel canal de transfert non secret convient — ce fichier ne contient aucun mot de passe), puis, **avant chaque script PowerShell de ce runbook** :
+**Le dépôt doit exister sur le DC** (`C:\vaultwarden-stack-SSO`) — tous les scripts `deploy\...` des phases suivantes s'y exécutent. Cloner directement si Git est disponible sur le DC :
+
+```powershell
+git clone <URL_DU_DEPOT_GIT> C:\vaultwarden-stack-SSO
+git -C C:\vaultwarden-stack-SSO checkout claude/sso-kerberos-vaultwarden-ad-rzg3w0
+```
+
+Si Git n'est pas installé sur le DC : télécharger une archive ZIP du dépôt (page du dépôt → Code → Download ZIP) et l'extraire dans `C:\vaultwarden-stack-SSO`, ou le transférer depuis l'hôte Docker via `smbclient` (même mécanique que ci-dessous pour `environment.env`, sur tout le dossier).
+
+**Transférer `deploy/environment.env`** (rempli côté Debian dans le bloc précédent — ce fichier ne contient aucun mot de passe, n'importe quel canal convient) :
+
+```bash
+# 🟢 Debian -- meme mecanique que le transfert du keytab (Phase 2), en sens inverse (put, pas get).
+# ${DOMAIN_NETBIOS} et ${DC_IP} = valeurs de deploy/environment.env.
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'put deploy/environment.env vaultwarden-stack-SSO/deploy/environment.env'
+```
+
+Dépose le fichier exactement à `C:\vaultwarden-stack-SSO\deploy\environment.env`, à côté de `00_Set-Environment.ps1` — son emplacement par défaut, pas besoin de `-Path` ensuite. Alternative manuelle (le fichier n'étant pas un secret, une session RDP + `notepad` + coller le contenu suffit tout aussi bien) si `smbclient` pose problème.
+
+Puis, **avant chaque script PowerShell de ce runbook** :
 
 ```powershell
 cd C:\vaultwarden-stack-SSO
-. .\deploy\00_Set-Environment.ps1 -Path 'C:\chemin\vers\environment.env'
-# ou, si environment.env est a cote de 00_Set-Environment.ps1 (deploy\environment.env) :
 . .\deploy\00_Set-Environment.ps1
+# ou, si le fichier a ete depose ailleurs qu'a l'emplacement par defaut :
+. .\deploy\00_Set-Environment.ps1 -Path 'C:\chemin\vers\environment.env'
 ```
 
 Le point (`.`) avant le chemin est obligatoire (dot-source) : sans lui, les variables ne survivent pas au retour du script. Tous les scripts PowerShell des phases suivantes lisent alors leurs paramètres par défaut (`$env:REALM`, `$env:DC_IP`, `$env:AUTH_HOSTNAME`, etc.) — plus besoin de les retaper sur chaque commande.
