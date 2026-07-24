@@ -22,6 +22,23 @@ Rien de ce qui suit n'est automatisé par ce dépôt — ce sont des conditions 
 - [ ] Gabarit de certificat **`WebServer`** (ou équivalent renseigné dans `CERT_TEMPLATE`) publié sur la CA et **enrollable** par le compte qui exécutera `New-VaultCertDC.ps1` (droit *Enroll*, cf. Security tab du gabarit dans `certtmpl.msc`) — Phase 1.
 - [ ] Gabarit **`Domain Controller Authentication`** (ou équivalent) auto-enrollé ou émis manuellement sur le(s) DC utilisé(s) pour LDAPS — sans certificat Schannel valide sur le port 636, la Source LDAP (Phase 2bis) ne pourra jamais se connecter en `ldaps://`. Vérifiable via `certlm.msc` (magasin Personal du DC) ou le gate `openssl s_client -connect <DC_IP>:636`.
 
+**Découverte de `CA_CONFIG` et `CA_ROOT_THUMBPRINT`** (à faire AVANT de remplir `deploy/environment.env`, Phase 0 — aucun script de ce dépôt ne les découvre à votre place, `New-VaultCertDC.ps1` se contente de les consommer) :
+
+```powershell
+# 🔵 DC (ou tout poste avec les RSAT AD CS Tools)
+certutil -ADCA
+# Repérer dans la sortie :
+#  - le nom de la CA    = premier "CN=..." de la ligne cACertificateDN
+#  - la machine CA       = l'entrée ACL "<DOMAINE>\<NOM_MACHINE>$"
+# -> CA_CONFIG = "<NOM_MACHINE>\<NomDeLaCA>" (ex: SRVDC\ExampleCA)
+
+Get-ChildItem Cert:\LocalMachine\Root | Select-Object Subject, Thumbprint | Format-List
+# Repérer la racine dont le Subject correspond a votre CA Enterprise (CN=<NomDeLaCA>)
+# -> CA_ROOT_THUMBPRINT = son Thumbprint (SHA-1, sans espaces)
+```
+
+Pas de ligne littérale `"Config:"` dans la sortie de `certutil -ADCA` — c'est la reconstruction `<machine CA>\<nom CA>` ci-dessus qu'il faut faire à la main. La racine doit déjà être présente dans `Cert:\LocalMachine\Root` sur un DC/poste joint au domaine (autoenrollment de la CA Enterprise) ; si elle n'y est pas, publier la racine via GPO (Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies → Trusted Root Certification Authorities) avant de continuer.
+
 **Outils requis sur le DC (ou le poste d'administration RSAT)**
 - [ ] Module PowerShell **`ActiveDirectory`** (RSAT-AD-PowerShell) — `Setup-KerberosSPNEGO-DC.ps1` et `Setup-LDAPBind-DC.ps1` en dépendent explicitement (`#Requires -Modules ActiveDirectory`).
 - [ ] Module PowerShell **`GroupPolicy`** + console **GPMC** — `Deploy-KerberosSSO-GPO.ps1` en dépend (`#Requires -Modules GroupPolicy`), et la GPMC GUI reste nécessaire pour l'étape manuelle de refus de logon interactif (Phase 2, User Rights Assignment — pas de cmdlet fiable pour ça).
@@ -73,9 +90,10 @@ git checkout claude/sso-kerberos-vaultwarden-ad-rzg3w0
 cp deploy/00_environment.env.example deploy/environment.env
 nano deploy/environment.env
 # Renseigner au minimum : REALM, DOMAIN_DNS, DOMAIN_NETBIOS, DC_IP,
-# VAULT_HOSTNAME, AUTH_HOSTNAME, CLIENT_SUBNETS, CA_CONFIG,
-# CA_ROOT_THUMBPRINT (empreinte SHA-1 de la racine AD CS -- voir Phase 1
-# bloc DC #1 pour la decouvrir si vous ne l'avez pas encore), GPO_TARGET_OU_DN.
+# VAULT_HOSTNAME, AUTH_HOSTNAME, CLIENT_SUBNETS, CA_CONFIG et
+# CA_ROOT_THUMBPRINT (voir "Decouverte de CA_CONFIG et CA_ROOT_THUMBPRINT"
+# dans la section Pre-requis AD ci-dessus si vous ne les avez pas encore),
+# GPO_TARGET_OU_DN.
 ```
 
 ### 🔵 DC
