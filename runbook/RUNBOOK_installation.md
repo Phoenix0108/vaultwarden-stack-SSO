@@ -104,14 +104,49 @@ nano deploy/environment.env
 
 ### 🔵 DC
 
-**Le dépôt doit exister sur le DC** (`C:\vaultwarden-stack-SSO`) — tous les scripts `deploy\...` des phases suivantes s'y exécutent. Cloner directement si Git est disponible sur le DC :
+**Le dépôt doit exister sur le DC** (`C:\vaultwarden-stack-SSO`) — tous les scripts `deploy\...` des phases suivantes s'y exécutent. Rien ne l'y transfère automatiquement : trois options.
+
+**Option A — Git installé sur le DC (recommandé).** `git --version` pour vérifier. Si absent, Windows Server 2016 ne l'embarque pas nativement — installer Git for Windows :
+
+```powershell
+# 🔵 DC, PowerShell elevé
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Server 2016 : TLS 1.2 n'est pas toujours active par defaut pour .NET/PowerShell --
+# sans cette ligne, Invoke-RestMethod/Invoke-WebRequest vers github.com echoue
+# silencieusement ou avec une erreur SSL/TLS peu explicite.
+
+$release = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest'
+$asset = $release.assets | Where-Object { $_.name -match '64-bit\.exe$' } | Select-Object -First 1
+$installer = Join-Path $env:TEMP $asset.name
+Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
+
+Start-Process -FilePath $installer -ArgumentList '/VERYSILENT /NORESTART /NOCANCEL /SP- /SUPPRESSMSGBOXES' -Wait
+
+# Rafraichir le PATH de la session courante (l'installeur le met a jour au niveau
+# machine, mais une session PowerShell deja ouverte ne le relit pas seule) :
+$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+git --version
+```
+
+Puis cloner :
 
 ```powershell
 git clone <URL_DU_DEPOT_GIT> C:\vaultwarden-stack-SSO
 git -C C:\vaultwarden-stack-SSO checkout claude/sso-kerberos-vaultwarden-ad-rzg3w0
 ```
 
-Si Git n'est pas installé sur le DC : télécharger une archive ZIP du dépôt (page du dépôt → Code → Download ZIP) et l'extraire dans `C:\vaultwarden-stack-SSO`, ou le transférer depuis l'hôte Docker via `smbclient` (même mécanique que ci-dessous pour `environment.env`, sur tout le dossier).
+**Option B — Sans Git, archive ZIP.** Télécharger le ZIP du dépôt (page du dépôt → Code → Download ZIP) et l'extraire dans `C:\vaultwarden-stack-SSO` — suffisant si vous n'avez pas besoin de `git pull` pour les mises à jour ultérieures.
+
+**Option C — Transfert depuis l'hôte Docker via `smbclient`** (même mécanique que ci-dessous pour `environment.env`, sur tout le dossier du dépôt cette fois) :
+
+```bash
+# 🟢 Debian
+set -a; source deploy/environment.env; set +a
+tar czf /tmp/vaultwarden-stack-SSO.tar.gz -C .. vaultwarden-stack-SSO
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'put /tmp/vaultwarden-stack-SSO.tar.gz vaultwarden-stack-SSO.tar.gz'
+rm -f /tmp/vaultwarden-stack-SSO.tar.gz
+```
+Puis, sur le DC, extraire l'archive (7-Zip ou `tar` natif depuis Windows 10/Server 2019 — sur Server 2016, installer 7-Zip ou utiliser l'option A/B à la place, `tar.exe` n'y est pas natif).
 
 **Transférer `deploy/environment.env`** (rempli côté Debian dans le bloc précédent — ce fichier ne contient aucun mot de passe, n'importe quel canal convient) :
 
