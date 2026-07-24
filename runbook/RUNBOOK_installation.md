@@ -51,8 +51,13 @@ Pas de ligne littérale `"Config:"` dans la sortie de `certutil -ADCA` — c'est
 - [ ] Administrateur local sur le DC lui-même (les scripts écrivent des fichiers sensibles en `C:\`, ex. keytab, mot de passe de bind LDAP) — toutes phases DC.
 
 **Structure AD à avoir déjà, ou à créer manuellement**
-- [ ] Une **OU pour les postes clients** doit déjà exister et son DN être renseigné dans `GPO_TARGET_OU_DN` (`deploy/environment.env`) — ce dépôt ne la crée jamais, seule l'OU de synchronisation LDAP (`LDAP_SYNC_OU_NAME`, défaut `Vaultwarden`) est créée automatiquement par `Setup-LDAPBind-DC.ps1`.
-- [ ] Les comptes utilisateurs à faire passer en SSO doivent être **déplacés/créés** dans cette OU de synchronisation LDAP — aucune automatisation de peuplement n'est fournie (délibéré : le choix des comptes concernés est une décision métier, pas technique).
+- [ ] Une **OU pour les postes clients** doit déjà exister et son DN complet être renseigné dans `GPO_TARGET_OU_DN` (`deploy/environment.env`) — ce dépôt ne la crée jamais, seule l'OU de synchronisation LDAP (`LDAP_SYNC_OU_NAME`, défaut `Vaultwarden` — un simple nom, pas un DN, créée automatiquement si absente) est gérée par `Setup-LDAPBind-DC.ps1`. Découverte :
+  ```powershell
+  # 🔵 DC
+  Get-ADOrganizationalUnit -Filter * | Select-Object Name, DistinguishedName
+  ```
+  Copier tel quel le `DistinguishedName` de l'OU contenant vos postes → `GPO_TARGET_OU_DN`. Exemple : domaine `vaultwardensso.local`, OU `Postes` à la racine → `OU=Postes,DC=vaultwardensso,DC=local` ; imbriquée sous un site `Paris` → `OU=Postes,OU=Paris,DC=vaultwardensso,DC=local`.
+- [ ] Les comptes utilisateurs à faire passer en SSO doivent être **déplacés/créés** dans l'OU de synchronisation LDAP (`LDAP_SYNC_OU_NAME`) — aucune automatisation de peuplement n'est fournie (délibéré : le choix des comptes concernés est une décision métier, pas technique).
 
 **Réseau et résolution de noms**
 - [ ] Enregistrements **DNS A** pour `VAULT_HOSTNAME` et `AUTH_HOSTNAME` créés dans la zone DNS intégrée à l'AD (ou tout DNS que vos postes clients interrogent), pointant vers l'IP de l'hôte Docker — sans ça, seul le poste sur lequel vous avez édité `hosts` manuellement pourra résoudre ces noms (le `/etc/hosts` de la Phase 1 ne couvre que l'hôte Docker lui-même, jamais les clients).
