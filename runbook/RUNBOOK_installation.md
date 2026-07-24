@@ -27,15 +27,16 @@ Rien de ce qui suit n'est automatisé par ce dépôt — ce sont des conditions 
 ```powershell
 # 🔵 DC (ou tout poste avec les RSAT AD CS Tools)
 certutil -ADCA
-# Repérer dans la sortie :
-#  - le nom de la CA    = premier "CN=..." de la ligne cACertificateDN
-#  - la machine CA       = l'entrée ACL "<DOMAINE>\<NOM_MACHINE>$"
-# -> CA_CONFIG = "<NOM_MACHINE>\<NomDeLaCA>" (ex: SRVDC\ExampleCA)
-
-Get-ChildItem Cert:\LocalMachine\Root | Select-Object Subject, Thumbprint | Format-List
-# Repérer la racine dont le Subject correspond a votre CA Enterprise (CN=<NomDeLaCA>)
-# -> CA_ROOT_THUMBPRINT = son Thumbprint (SHA-1, sans espaces)
 ```
+
+Une seule commande suffit dans le cas le plus courant (CA Enterprise **racine**, celui par défaut de ce dépôt) — repérer ces champs précis dans la sortie :
+
+| Champ affiché par `certutil -ADCA` | Variable `environment.env` | Comment le lire |
+|---|---|---|
+| `dNSHostName = <machine>.<domaine>` (partie avant le premier point) + `cn = <nom-CA>` | `CA_CONFIG` | Concaténer `<machine>\<nom-CA>` — ex. `dNSHostName = SRVADTEST.vaultwardensso.local` et `cn = vaultwardensso-SRVADTEST-CA` → `CA_CONFIG=SRVADTEST\vaultwardensso-SRVADTEST-CA` |
+| `Cert Hash(sha1): xx xx xx ...` | `CA_ROOT_THUMBPRINT` | Supprimer les espaces, mettre en majuscules — ex. `21 a0 63 c1 06 fe 3b 68 c5 49 9b 27 98 b0 4a 10 f5 58 b9 ea` → `CA_ROOT_THUMBPRINT=21A063C106FE3B68C5499B2798B04A10F558B9EA` |
+
+**Condition pour que `Cert Hash(sha1)` soit directement la bonne valeur** : la ligne `Root Certificate: Subject matches Issuer` doit être présente juste au-dessus — elle confirme que cette CA est bien auto-signée (root), donc que son propre hash EST le thumbprint de la racine. Si cette ligne indique un mismatch (CA subordonnée), le hash affiché ici n'est pas le bon : remonter jusqu'à la vraie racine avec `Get-ChildItem Cert:\LocalMachine\Root | Select-Object Subject, Thumbprint | Format-List` et repérer celle dont le Subject correspond à votre chaîne de confiance.
 
 Pas de ligne littérale `"Config:"` dans la sortie de `certutil -ADCA` — c'est la reconstruction `<machine CA>\<nom CA>` ci-dessus qu'il faut faire à la main. La racine doit déjà être présente dans `Cert:\LocalMachine\Root` sur un DC/poste joint au domaine (autoenrollment de la CA Enterprise) ; si elle n'y est pas, publier la racine via GPO (Computer Configuration → Policies → Windows Settings → Security Settings → Public Key Policies → Trusted Root Certification Authorities) avant de continuer.
 
