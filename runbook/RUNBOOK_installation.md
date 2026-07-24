@@ -117,7 +117,10 @@ Si Git n'est pas installé sur le DC : télécharger une archive ZIP du dépôt 
 
 ```bash
 # 🟢 Debian -- meme mecanique que le transfert du keytab (Phase 2), en sens inverse (put, pas get).
-# ${DOMAIN_NETBIOS} et ${DC_IP} = valeurs de deploy/environment.env.
+# Charge DC_IP/DOMAIN_NETBIOS dans le shell -- sans cette ligne, $DC_IP est
+# vide et smbclient echoue avec "Connection to  failed (NT_STATUS_NOT_FOUND)"
+# (adresse vide, pas un vrai probleme reseau).
+set -a; source deploy/environment.env; set +a
 smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'put deploy/environment.env vaultwarden-stack-SSO/deploy/environment.env'
 ```
 
@@ -248,11 +251,9 @@ sudo systemctl enable --now docker
 Depuis la racine du dépôt (`deploy/environment.env` déjà rempli — Phase 0) :
 
 ```bash
-DC_IP=$(grep '^DC_IP=' deploy/environment.env | cut -d= -f2)
-DC_NETBIOS=$(grep '^DOMAIN_NETBIOS=' deploy/environment.env | cut -d= -f2)
-VAULT_HOSTNAME=$(grep '^VAULT_HOSTNAME=' deploy/environment.env | cut -d= -f2)
+set -a; source "$(git rev-parse --show-toplevel)/deploy/environment.env"; set +a
 
-smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'get vault-new.pfx; get vault-new.pfxpass.txt; get vault-new.cer; get adcs-root.cer'
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'get vault-new.pfx; get vault-new.pfxpass.txt; get vault-new.cer; get adcs-root.cer'
 
 # certreq -submit sans -binary sort le certificat en Base64 (PEM), pas en DER -> pas d'-inform der ici
 openssl x509 -in vault-new.cer -out vault-new.pem
@@ -286,6 +287,8 @@ Remove-Item C:\vault-new.pfx, C:\vault-new.pfxpass.txt, C:\vault-new.cer, C:\vau
 ### 🟢 DEBIAN — bloc 3 : secrets, déploiement, résolution locale
 
 ```bash
+set -a; source "$(git rev-parse --show-toplevel)/deploy/environment.env"; set +a
+
 cd deploy/03_docker
 cp .env.example .env
 chmod 600 .env
@@ -305,6 +308,8 @@ echo "127.0.0.1 $AUTH_HOSTNAME"  | sudo tee -a /etc/hosts
 ### 🟢 DEBIAN — Gate Phase 1
 
 ```bash
+set -a; source "$(git rev-parse --show-toplevel)/deploy/environment.env"; set +a
+
 openssl s_client -connect "$VAULT_HOSTNAME:443" -servername "$VAULT_HOSTNAME" </dev/null 2>/dev/null | openssl x509 -noout -issuer
 # attendu : issuer = votre CA AD CS (CA_ROOT_THUMBPRINT)
 
@@ -349,12 +354,14 @@ gpupdate /force
 ### 🟢 DEBIAN — Transfert du keytab
 
 ```bash
-smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'get authentik.keytab'
+set -a; source "$(git rev-parse --show-toplevel)/deploy/environment.env"; set +a
+
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'get authentik.keytab'
 sha256sum authentik.keytab
 # comparer avec le hash affiche par le script cote DC (Get-FileHash) -> DOIT etre identique
 sudo chown root:root authentik.keytab
 sudo chmod 600 authentik.keytab
-smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'del authentik.keytab'
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'del authentik.keytab'
 ```
 
 ---
@@ -375,7 +382,9 @@ Crée (idempotent) l'OU `LDAP_SYNC_OU_NAME` (défaut `Vaultwarden` — périmèt
 ### 🟢 DEBIAN — transfert
 
 ```bash
-smbclient "//$DC_IP/C\$" -U "${DC_NETBIOS}\\Administrator" -c 'get authentik-ldap-bind.txt'
+set -a; source "$(git rev-parse --show-toplevel)/deploy/environment.env"; set +a
+
+smbclient "//$DC_IP/C\$" -U "${DOMAIN_NETBIOS}\\Administrator" -c 'get authentik-ldap-bind.txt'
 openssl s_client -connect "$DC_IP:636" -CAfile deploy/03_docker/adcs-root.crt </dev/null 2>&1 | grep "Verify return code"
 # attendu : Verify return code: 0 -- sinon ne pas configurer la Source LDAP en LDAPS tant que ce n'est pas corrige
 ```
@@ -426,9 +435,9 @@ shred -u authentik.keytab.b64
 
 ### Gates séquentiels
 
-🟠 :
+🟠 (remplacer `<AUTH_HOSTNAME>` par sa valeur réelle — ce poste de test n'a pas de raison d'avoir `deploy/environment.env`) :
 ```bash
-curl --negotiate -u : "https://$AUTH_HOSTNAME/source/kerberos/kerberos-sso/"
+curl --negotiate -u : "https://<AUTH_HOSTNAME>/source/kerberos/kerberos-sso/"
 # attendu : 302 (pas 401 final)
 ```
 
@@ -454,13 +463,14 @@ Ce script fait tout, y compris générer et déposer `firefox-policies.json` dan
 
 ### 🟠 Poste de test
 
+Ce poste de test n'a normalement pas `deploy/environment.env` dessus (contrairement au DC) — soit l'y copier et exécuter `. .\deploy\00_Set-Environment.ps1` d'abord (fichier non secret), soit remplacer `$env:DOMAIN_DNS` par sa valeur littérale ci-dessous et passer `-VaultBaseUrl` explicitement à `Set-BitwardenClientPolicy.ps1` :
+
 ```powershell
 # alternative/complement a la GPO fleet, pour un test manuel poste par poste
-# (apres . .\deploy\00_Set-Environment.ps1, ou en passant -VaultBaseUrl explicitement)
-.\deploy\06_gpo\Set-BitwardenClientPolicy.ps1
+.\deploy\06_gpo\Set-BitwardenClientPolicy.ps1 -VaultBaseUrl 'https://<VAULT_HOSTNAME>'
 
 New-Item -ItemType Directory -Force -Path 'C:\Program Files\Mozilla Firefox\distribution' | Out-Null
-Copy-Item -Path "\\$env:DOMAIN_DNS\SYSVOL\$env:DOMAIN_DNS\scripts\firefox-policies.json" -Destination 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Force
+Copy-Item -Path "\\<DOMAIN_DNS>\SYSVOL\<DOMAIN_DNS>\scripts\firefox-policies.json" -Destination 'C:\Program Files\Mozilla Firefox\distribution\policies.json' -Force
 
 gpupdate /force
 gpresult /r
